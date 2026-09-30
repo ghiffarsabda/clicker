@@ -1,0 +1,594 @@
+/**
+ * Clicker — side panel UI.
+ * Owns the macro/step model in chrome.storage.local and drives the background
+ * worker for picking and running.
+ */
+
+const ACTIONS = {
+  click: { label: 'Click', pick: true },
+  type: { label: 'Type', pick: true },
+  press: { label: 'Key press', pick: true },
+  wait: { label: 'Wait', pick: false },
+  navigate: { label: 'Go to URL', pick: false }
+};
+
+const state = {
+  macros: [],
+  selectedId: null,
+  running: false,
+  armed: false,
+  replaceStepId: null,
+  logs: []
+};
+
+const $ = (sel) => document.querySelector(sel);
+const ui = {};
+
+let persistTimer = null;
+
+document.addEventListener('DOMContentLoaded', init);
+
+async function init() {
+  ui.statusDot = $('#status-dot');
+  ui.macroSelect = $('#macro-select');
+  ui.steps = $('#steps');
+  ui.empty = $('#empty-state');
+  ui.runBtn = $('#btn-run');
+  ui.stopBtn = $('#btn-stop');
+  ui.log = $('#log');
+  ui.autoToggle = $('#auto-toggle');
+  ui.autoFields = $('#auto-fields');
+  ui.autoPattern = $('#auto-pattern');
+  ui.autoDelay = $('#auto-delay');
+  ui.loopToggle = $('#loop-toggle');
+  ui.loopFields = $('#loop-fields');
+  ui.loopCount = $('#loop-count');
+  ui.loopInterval = $('#loop-interval');
+
+  bindEvents();
+
+  const stored = await chrome.storage.local.get(['macros', 'selectedMacroId']);
+  state.macros = Array.isArray(stored.macros) ? stored.macros : [];
+  state.selectedId = stored.selectedMacroId || null;
+
+  if (state.macros.length === 0) {
+    const macro = makeMacro('My first macro');
+    state.macros.push(macro);
+    state.selectedId = macro.id;
+    await persist();
+  }
+  if (!state.macros.some((m) => m.id === state.selectedId)) {
+    state.selectedId = state.macros[0].id;
+    await persist();
+  }
+
+  render();
+  chrome.runtime.onMessage.addListener(onRuntimeMessage);
+  log('Ready. Pick an element to start building.', 'dim');
+}
+
+/* ---------------------------------------------------------------- *
+ *  Model                                                           *
+ * ---------------------------------------------------------------- */
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function makeMacro(name) {
+  return { id: uid(), name: name || 'Untitled macro', steps: [], createdAt: Date.now() };
+}
+
+function currentMacro() {
+  return state.macros.find((m) => m.id === state.selectedId) || null;
+}
+
+function schedulePersist() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(persist, 400);
+}
+
+function persist() {
+  return chrome.storage.local.set({ macros: state.macros, selectedMacroId: state.selectedId });
+}
+
+function addStep(step) {
+  const macro = currentMacro();
+  if (!macro) return;
+  macro.steps.push(Object.assign({ id: uid() }, step));
+  persist();
+  renderSteps();
+  renderMacroSelect();
+}
+
+function updateStep(stepId, patch) {
+  const macro = currentMacro();
+  if (!macro) return;
+  const step = macro.steps.find((s) => s.id === stepId);
+  if (!step) return;
+  Object.assign(step, patch);
+  schedulePersist();
+}
+
+function removeStep(stepId) {
+  const macro = currentMacro();
+  if (!macro) return;
+  macro.steps = macro.steps.filter((s) => s.id !== stepId);
+  persist();
+  renderSteps();
+  renderMacroSelect();
+}
+
+function moveStep(stepId, dir) {
+  const macro = currentMacro();
+  if (!macro) return;
+  const idx = macro.steps.findIndex((s) => s.id === stepId);
+  const next = idx + dir;
+  if (idx === -1 || next < 0 || next >= macro.steps.length) return;
+  [macro.steps[idx], macro.steps[next]] = [macro.steps[next], macro.steps[idx]];
+  persist();
+  renderSteps();
+}
+
+/* ---------------------------------------------------------------- *
+ *  Events                                                          *
+ * ---------------------------------------------------------------- */
+
+function bindEvents() {
+  ui.macroSelect.addEventListener('change', async () => {
+    state.selectedId = ui.macroSelect.value;
+    await persist();
+    render();
+  });
+
+  $('#btn-new').addEventListener('click', async () => {
+    const name = prompt('Name for the new macro:', 'New macro');
+    if (name === null) return;
+    const macro = makeMacro(name.trim() || 'Untitled macro');
+    state.macros.unshift(macro);
+    state.selectedId = macro.id;
+    await persist();
+    render();
+    log(`Created macro "${macro.name}"`, 'ok');
+  });
+
+  $('#btn-rename').addEventListener('click', async () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    const name = prompt('Rename macro:', macro.name);
+    if (name === null || !name.trim()) return;
+    macro.name = name.trim();
+    await persist();
+    render();
+  });
+
+  $('#btn-delete').addEventListener('click', async () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    if (!confirm(`Delete macro "${macro.name}"?`)) return;
+    state.macros = state.macros.filter((m) => m.id !== macro.id);
+    if (state.macros.length === 0) state.macros.push(makeMacro('My first macro'));
+    state.selectedId = state.macros[0].id;
+    await persist();
+    render();
+    log(`Deleted macro "${macro.name}"`);
+  });
+
+  document.querySelectorAll('[data-add]').forEach((btn) => {
+    btn.addEventListener('click', () => onAddStep(btn.dataset.add));
+  });
+
+  ui.runBtn.addEventListener('click', runSelected);
+  ui.stopBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'STOP_MACRO' });
+    log('Stop requested…');
+  });
+
+  ui.autoToggle.addEventListener('change', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.auto = ui.autoToggle.checked;
+    persist();
+    renderAuto();
+    renderMacroSelect();
+    log(
+      macro.auto
+        ? `Auto mode ON — "${macro.name}" runs on ${(macro.urlPattern || '').trim() || 'any page'}`
+        : `Auto mode off — "${macro.name}"`,
+      macro.auto ? 'ok' : ''
+    );
+  });
+
+  ui.autoPattern.addEventListener('input', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.urlPattern = ui.autoPattern.value;
+    schedulePersist();
+  });
+
+  ui.autoDelay.addEventListener('input', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.autoDelay = Number(ui.autoDelay.value) || 0;
+    schedulePersist();
+  });
+
+  ui.loopToggle.addEventListener('change', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.loop = ui.loopToggle.checked;
+    persist();
+    renderLoop();
+    renderMacroSelect();
+    if (macro.loop) {
+      const times = Number(macro.loopCount) > 0 ? `${macro.loopCount}×` : 'until you press Stop';
+      log(`Loop mode ON — "${macro.name}" repeats ${times}`, 'ok');
+    } else {
+      log(`Loop mode off — "${macro.name}"`);
+    }
+  });
+
+  ui.loopCount.addEventListener('input', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.loopCount = Number(ui.loopCount.value) || 0;
+    schedulePersist();
+  });
+
+  ui.loopInterval.addEventListener('input', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.loopInterval = Number(ui.loopInterval.value) || 0;
+    schedulePersist();
+  });
+
+  $('#btn-clear-log').addEventListener('click', () => {
+    state.logs = [];
+    renderLog();
+  });
+}
+
+function onAddStep(action) {
+  if (ACTIONS[action] && ACTIONS[action].pick) {
+    startPick(action);
+    return;
+  }
+  if (action === 'wait') {
+    addStep({ action: 'wait', ms: 1000 });
+  } else if (action === 'navigate') {
+    addStep({ action: 'navigate', url: 'https://' });
+    renderSteps();
+    const input = ui.steps.querySelector('.step:last-child .step-input');
+    if (input) input.focus();
+  }
+}
+
+function startPick(action, replaceStepId = null) {
+  state.replaceStepId = replaceStepId;
+  state.armed = true;
+  renderStatus();
+  chrome.runtime.sendMessage({ type: 'ARM_PICKER', mode: action });
+  log(`Picking element to ${ACTIONS[action].label.toLowerCase()}… click it on the page.`, 'dim');
+}
+
+function runSelected() {
+  const macro = currentMacro();
+  if (!macro) return;
+  if (!macro.steps.length) {
+    log('Add at least one step before running.', 'err');
+    return;
+  }
+  chrome.runtime.sendMessage({ type: 'RUN_MACRO', macroId: macro.id });
+}
+
+/* ---------------------------------------------------------------- *
+ *  Background messages                                             *
+ * ---------------------------------------------------------------- */
+
+function onRuntimeMessage(msg) {
+  if (!msg || !msg.type) return;
+
+  if (msg.type === 'ELEMENT_PICKED') {
+    state.armed = false;
+    const action = msg.mode || 'click';
+
+    if (state.replaceStepId) {
+      updateStep(state.replaceStepId, { target: msg.target });
+      log(`Re-picked: ${msg.target.label}`, 'ok');
+      state.replaceStepId = null;
+      persist();
+      renderSteps();
+    } else {
+      const base = { action, target: msg.target };
+      if (action === 'type') base.value = '';
+      if (action === 'press') base.key = 'Enter';
+      addStep(base);
+      log(`Added ${ACTIONS[action].label} step → ${msg.target.label}`, 'ok');
+    }
+    renderStatus();
+
+  } else if (msg.type === 'PICK_CANCELLED' || (msg.type === 'PICK_STATUS' && msg.state !== 'armed')) {
+    state.armed = false;
+    state.replaceStepId = null;
+    renderStatus();
+    if (msg.type === 'PICK_STATUS' && msg.error) log(msg.error, 'err');
+
+  } else if (msg.type === 'PICK_STATUS' && msg.state === 'armed') {
+    state.armed = true;
+    renderStatus();
+
+  } else if (msg.type === 'RUN_LOOP') {
+    log(`Loop ${msg.iteration}${msg.total ? ' of ' + msg.total : ''}`, 'dim');
+
+  } else if (msg.type === 'RUN_PROGRESS') {
+    const tag = msg.iteration ? `[${msg.iteration}${msg.iterations ? '/' + msg.iterations : ''}] ` : '';
+    log(`${tag}Step ${msg.index + 1}/${msg.total} — ${ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action}`);
+
+  } else if (msg.type === 'RUN_STATUS') {
+    if (msg.state === 'running') {
+      state.running = true;
+      log(`Running "${msg.name}"${msg.auto ? ' (auto)' : ''}${msg.loop ? ' (looping)' : ''}…`, 'ok');
+    } else if (msg.state === 'done') {
+      state.running = false;
+      log(msg.loops && msg.loops !== 1 ? `Finished "${msg.name}" after ${msg.loops} loops.` : `Finished "${msg.name}".`, 'ok');
+    } else if (msg.state === 'error') {
+      state.running = false;
+      log(msg.cancelled ? 'Stopped.' : `Error: ${msg.error}`, 'err');
+    }
+    renderStatus();
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ *  Rendering                                                       *
+ * ---------------------------------------------------------------- */
+
+function render() {
+  renderMacroSelect();
+  renderAuto();
+  renderLoop();
+  renderSteps();
+  renderStatus();
+}
+
+function renderLoop() {
+  const macro = currentMacro();
+  if (!macro) return;
+  ui.loopToggle.checked = !!macro.loop;
+  ui.loopCount.value = String(macro.loopCount == null ? 0 : macro.loopCount);
+  ui.loopInterval.value = String(macro.loopInterval == null ? 1000 : macro.loopInterval);
+  ui.loopFields.style.display = macro.loop ? 'flex' : 'none';
+}
+
+function renderAuto() {
+  const macro = currentMacro();
+  if (!macro) return;
+  ui.autoToggle.checked = !!macro.auto;
+  ui.autoPattern.value = macro.urlPattern || '';
+  ui.autoDelay.value = String(macro.autoDelay == null ? 500 : macro.autoDelay);
+  ui.autoFields.style.display = macro.auto ? 'flex' : 'none';
+}
+
+function renderMacroSelect() {
+  ui.macroSelect.innerHTML = '';
+  for (const macro of state.macros) {
+    const opt = document.createElement('option');
+    opt.value = macro.id;
+    opt.textContent = `${macro.auto ? '⚡' : ''}${macro.loop ? '↻' : ''}${macro.auto || macro.loop ? ' ' : ''}${macro.name} (${macro.steps.length})`;
+    if (macro.id === state.selectedId) opt.selected = true;
+    ui.macroSelect.appendChild(opt);
+  }
+}
+
+function renderSteps() {
+  const macro = currentMacro();
+  const steps = macro ? macro.steps : [];
+  ui.steps.innerHTML = '';
+
+  if (steps.length === 0) {
+    ui.empty.style.display = 'block';
+    return;
+  }
+  ui.empty.style.display = 'none';
+
+  steps.forEach((step, idx) => {
+    ui.steps.appendChild(buildStepRow(step, idx, steps.length));
+  });
+}
+
+function buildStepRow(step, idx, total) {
+  const row = document.createElement('div');
+  row.className = 'step';
+
+  const head = document.createElement('div');
+  head.className = 'step-head';
+
+  const index = document.createElement('span');
+  index.className = 'step-index';
+  index.textContent = String(idx + 1);
+
+  const action = document.createElement('span');
+  action.className = 'step-action';
+  action.textContent = (ACTIONS[step.action] && ACTIONS[step.action].label) || step.action;
+
+  const tools = document.createElement('div');
+  tools.className = 'step-tools';
+  tools.appendChild(toolBtn('↑', 'Move up', () => moveStep(step.id, -1), idx === 0));
+  tools.appendChild(toolBtn('↓', 'Move down', () => moveStep(step.id, 1), idx === total - 1));
+  tools.appendChild(toolBtn('✕', 'Delete step', () => removeStep(step.id)));
+
+  head.appendChild(index);
+  head.appendChild(action);
+  head.appendChild(tools);
+  row.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'step-body';
+
+  if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
+    body.appendChild(buildTargetBlock(step));
+    body.appendChild(matchModeRow(step));
+  }
+
+  if (step.action === 'type') {
+    body.appendChild(fieldRow('Value', textInput(step.value || '', (v) => updateStep(step.id, { value: v }))));
+  } else if (step.action === 'press') {
+    body.appendChild(fieldRow('Key', textInput(step.key || 'Enter', (v) => updateStep(step.id, { key: v }))));
+  } else if (step.action === 'wait') {
+    body.appendChild(
+      fieldRow('ms', numberInput(step.ms || 0, (v) => updateStep(step.id, { ms: v })))
+    );
+  } else if (step.action === 'navigate') {
+    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+  }
+
+  row.appendChild(body);
+  return row;
+}
+
+function buildTargetBlock(step) {
+  const wrap = document.createElement('div');
+  wrap.className = 'target';
+
+  if (step.target) {
+    const label = document.createElement('div');
+    label.className = 'target-label';
+    label.title = step.target.label || '';
+    label.textContent = step.target.label || step.target.selector || 'element';
+
+    const selector = document.createElement('div');
+    selector.className = 'selector';
+    selector.title = step.target.selector || '';
+    selector.textContent = step.target.selector || '(no selector)';
+
+    wrap.appendChild(label);
+    wrap.appendChild(selector);
+  } else {
+    const missing = document.createElement('div');
+    missing.className = 'target-label';
+    missing.textContent = 'No element picked';
+    wrap.appendChild(missing);
+  }
+
+  const repick = document.createElement('button');
+  repick.className = 'repick-btn';
+  repick.textContent = 're-pick element';
+  repick.addEventListener('click', () => startPick(step.action, step.id));
+  wrap.appendChild(repick);
+
+  return wrap;
+}
+
+function matchModeRow(step) {
+  const row = document.createElement('div');
+  row.className = 'field-row';
+
+  const label = document.createElement('span');
+  label.className = 'field-label';
+  label.textContent = 'Match';
+
+  const wrap = document.createElement('label');
+  wrap.className = 'checkbox-inline';
+  wrap.title = 'Off = match by structure (id, classes, position) so a changing label still matches. On = text is also used.';
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = !!step.textMatch;
+  cb.addEventListener('change', () => {
+    updateStep(step.id, { textMatch: cb.checked });
+    log(cb.checked ? 'Matching by text as well as structure.' : 'Matching by structure only (ignores text).');
+  });
+
+  const text = document.createElement('span');
+  text.textContent = 'also match by text';
+
+  wrap.appendChild(cb);
+  wrap.appendChild(text);
+  row.appendChild(label);
+  row.appendChild(wrap);
+  return row;
+}
+
+function toolBtn(text, title, onClick, disabled) {
+  const btn = document.createElement('button');
+  btn.className = 'tool-btn';
+  btn.textContent = text;
+  btn.title = title;
+  btn.disabled = !!disabled;
+  btn.addEventListener('click', onClick);
+  return btn;
+}
+
+function fieldRow(labelText, input) {
+  const row = document.createElement('div');
+  row.className = 'field-row';
+
+  const label = document.createElement('span');
+  label.className = 'field-label';
+  label.textContent = labelText;
+
+  row.appendChild(label);
+  row.appendChild(input);
+  return row;
+}
+
+function textInput(value, onChange) {
+  const input = document.createElement('input');
+  input.className = 'step-input';
+  input.type = 'text';
+  input.value = value;
+  input.addEventListener('input', () => onChange(input.value));
+  return input;
+}
+
+function numberInput(value, onChange) {
+  const input = document.createElement('input');
+  input.className = 'step-input';
+  input.type = 'number';
+  input.min = '0';
+  input.step = '100';
+  input.value = String(value);
+  input.addEventListener('input', () => onChange(Number(input.value) || 0));
+  return input;
+}
+
+function renderStatus() {
+  ui.statusDot.classList.toggle('running', state.running);
+  ui.statusDot.classList.toggle('armed', state.armed && !state.running);
+
+  ui.runBtn.disabled = state.running;
+  ui.stopBtn.disabled = !state.running;
+}
+
+/* ---------------------------------------------------------------- *
+ *  Log                                                             *
+ * ---------------------------------------------------------------- */
+
+function log(text, kind) {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  state.logs.push({
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+    text,
+    kind: kind || ''
+  });
+  if (state.logs.length > 300) state.logs.shift();
+  renderLog();
+}
+
+function renderLog() {
+  ui.log.innerHTML = '';
+  for (const entry of state.logs) {
+    const line = document.createElement('div');
+    line.className = 'log-line' + (entry.kind ? ' ' + entry.kind : '');
+
+    const time = document.createElement('span');
+    time.className = 't';
+    time.textContent = entry.time;
+
+    line.appendChild(time);
+    line.appendChild(document.createTextNode(entry.text));
+    ui.log.appendChild(line);
+  }
+  ui.log.scrollTop = ui.log.scrollHeight;
+}

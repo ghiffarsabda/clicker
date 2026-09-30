@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clicker — Macro Builder</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-dot" id="status-dot"></span>
+      <span class="brand-name">Clicker</span>
+    </div>
+    <span class="brand-sub">Macro Builder</span>
+  </header>
+
+  <section class="macro-bar">
+    <select id="macro-select" class="macro-select" title="Selected macro"></select>
+    <button id="btn-new" class="icon-btn" title="New macro">+</button>
+    <button id="btn-rename" class="icon-btn" title="Rename macro">&#9998;</button>
+    <button id="btn-delete" class="icon-btn" title="Delete macro">&#128465;</button>
+  </section>
+
+  <section class="auto-card">
+    <label class="auto-row">
+      <input type="checkbox" id="auto-toggle">
+      <span class="auto-title">Auto mode</span>
+      <span class="auto-hint">run when a matching page loads</span>
+    </label>
+    <div class="auto-fields" id="auto-fields">
+      <div class="field-row">
+        <span class="field-label">URL</span>
+        <input type="text" id="auto-pattern" class="step-input" placeholder="https://example.com/*  (blank = any page)" spellcheck="false">
+      </div>
+      <div class="field-row">
+        <span class="field-label">Delay</span>
+        <input type="number" id="auto-delay" class="step-input" min="0" step="100" value="500">
+        <span class="field-label">ms</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="auto-card">
+    <label class="auto-row">
+      <input type="checkbox" id="loop-toggle">
+      <span class="auto-title">Loop mode</span>
+      <span class="auto-hint">repeat the steps</span>
+    </label>
+    <div class="auto-fields" id="loop-fields">
+      <div class="field-row">
+        <span class="field-label">Times</span>
+        <input type="number" id="loop-count" class="step-input" min="0" step="1" value="0">
+        <span class="field-label">0 = until Stop</span>
+      </div>
+      <div class="field-row">
+        <span class="field-label">Every</span>
+        <input type="number" id="loop-interval" class="step-input" min="0" step="100" value="1000">
+        <span class="field-label">ms</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="add-bar">
+    <span class="add-label">Add step</span>
+    <div class="add-buttons">
+      <button class="add-btn" data-add="click">Click</button>
+      <button class="add-btn" data-add="type">Type</button>
+      <button class="add-btn" data-add="press">Key</button>
+      <button class="add-btn" data-add="wait">Wait</button>
+      <button class="add-btn" data-add="navigate">Go to</button>
+    </div>
+  </section>
+
+  <main class="steps-wrap">
+    <div id="empty-state" class="empty-state">
+      <p>No steps yet.</p>
+      <p class="muted">Hit <b>Click</b> or <b>Type</b>, then pick an element on the page.</p>
+    </div>
+    <div id="steps" class="steps"></div>
+  </main>
+
+  <footer class="run-bar">
+    <button id="btn-run" class="run-btn">&#9654; Run</button>
+    <button id="btn-stop" class="stop-btn" disabled>&#9632; Stop</button>
+    <span id="run-hint" class="run-hint">Alt+Shift+R</span>
+  </footer>
+
+  <section class="log-wrap">
+    <div class="log-head">
+      <span>Activity</span>
+      <button id="btn-clear-log" class="link-btn">clear</button>
+    </div>
+    <div id="log" class="log"></div>
+  </section>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Clicker — Macro Builder",
+  "version": "1.0.0",
+  "description": "Build custom macros by picking elements on a page, then replay click, type, wait and navigate steps to automate repetitive tasks.",
+  "permissions": [
+    "sidePanel",
+    "scripting",
+    "storage",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "action": {
+    "default_title": "Clicker — open macro builder"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+M" },
+      "description": "Open the Clicker macro builder"
+    },
+    "run-selected-macro": {
+      "suggested_key": { "default": "Alt+Shift+R" },
+      "description": "Run the selected macro"
+    },
+    "arm-picker": {
+      "suggested_key": { "default": "Alt+Shift+E" },
+      "description": "Pick an element for the selected macro"
+    }
+  },
+  "minimum_chrome_version": "116"
+}

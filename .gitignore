@@ -1,0 +1,9 @@
+# Local tooling / session config
+.commandcode/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.zip
