@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Clicker — Macro Builder",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Build custom macros by picking elements on a page, then replay click, type, wait and navigate steps to automate repetitive tasks.",
   "permissions": [
     "sidePanel",

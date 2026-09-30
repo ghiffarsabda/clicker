@@ -349,7 +349,8 @@ function onRuntimeMessage(msg) {
 
   } else if (msg.type === 'RUN_PROGRESS') {
     const tag = msg.iteration ? `[${msg.iteration}${msg.iterations ? '/' + msg.iterations : ''}] ` : '';
-    log(`${tag}Step ${msg.index + 1}/${msg.total} — ${ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action}`);
+    const where = msg.url ? ` · ${hostOf(msg.url)}` : '';
+    log(`${tag}Step ${msg.index + 1}/${msg.total} — ${ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action}${where}`);
 
   } else if (msg.type === 'RUN_STATUS') {
     if (msg.state === 'running') {

@@ -147,7 +147,8 @@ async function runMacro(macroId, opts = {}) {
     history: [tab.id],
     follow: macro.followTabs !== false,
     startedAt: Date.now(),
-    stepStartedAt: Date.now()
+    stepStartedAt: Date.now(),
+    tabUrl: tab.url || ''
   };
 
   // Loop mode: repeat the whole step list `loopCount` times (0 = until stopped).
@@ -177,6 +178,7 @@ async function runMacro(macroId, opts = {}) {
           index: i,
           total: macro.steps.length,
           action: step.action,
+          url: activeRun.tabUrl,
           iteration: looping ? iteration : null,
           iterations: totalLabel
         });
@@ -383,7 +385,10 @@ function adoptTab(tabId) {
   if (activeRun.history.length > 20) activeRun.history.shift();
   chrome.tabs
     .get(tabId)
-    .then((t) => emit({ type: 'TAB_CHANGED', tabId, url: t.url, title: t.title }))
+    .then((t) => {
+      activeRun.tabUrl = t.url || activeRun.tabUrl;
+      emit({ type: 'TAB_CHANGED', tabId, url: t.url, title: t.title });
+    })
     .catch(() => {});
 }
 
@@ -418,22 +423,27 @@ async function maybeFollowNewTab() {
     (t) =>
       !t.consumed &&
       t.time >= since &&
-      t.windowId === activeRun.windowId &&
       t.id !== activeRun.tabId &&
       !activeRun.history.includes(t.id) // never yank back to a tab we already used
   );
   if (!candidates.length) return null;
 
-  // Prefer the tab whose opener is the tab we're on; otherwise take the only candidate.
+  const sameWindow = candidates.filter((t) => t.windowId === activeRun.windowId);
   const pick =
-    candidates.find((t) => t.openerTabId === activeRun.tabId) || (candidates.length === 1 ? candidates[0] : null);
+    sameWindow.find((t) => t.openerTabId === activeRun.tabId) ||
+    candidates.find((t) => t.openerTabId === activeRun.tabId) ||
+    (sameWindow.length === 1 ? sameWindow[0] : null) ||
+    (candidates.length === 1 ? candidates[0] : null);
   if (!pick) return null;
 
   pick.consumed = true;
-  const tab = await chrome.tabs.get(pick.id).catch(() => null);
-  if (!tab || isRestricted(tab)) return null;
 
-  await waitForNewTabUrl(pick.id).catch(() => {});
+  // A just-opened tab has no URL yet (url:'' / about:blank / chrome://newtab), so
+  // wait for it to become a real page BEFORE judging whether it can be scripted —
+  // otherwise every fresh tab looks "restricted" and adoption silently fails.
+  const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
+  if (!loaded || isRestricted(loaded)) return null;
+
   await ensureAgent(pick.id).catch(() => {});
   adoptTab(pick.id);
   return pick.id;
