@@ -79,11 +79,14 @@ The **Scroll** step moves the page like a person would, not with one instant jum
 - **scroll to element…** — optionally pick an element instead; the page scrolls until it is
   centred (handles nested scroll containers too).
 
-The motion is a series of quick "flicks" — about half a screen each, with ease-out deceleration,
-jittered frame timing and a short beat between flicks — and each frame dispatches a real `wheel`
-event so apps that listen for scrolling react the same way. Distance is clamped to the page
-bounds, the flick count is capped so a very long page can't spin for minutes, and Stop interrupts
-a scroll mid-flight.
+The motion is randomised so no two scrolls feel the same: each gesture is planned as a series of
+flicks with independently random **sizes** (tiny nudges, normal flicks, occasional big throws) and
+independent random **timing** (quick, normal, or slow and deliberate), some using distinct motion
+profiles — ease-out, ease-in, ease-in-out, linear, and a stuttery stepwise one — with jittered
+frame cadence and the occasional mid-scroll pause. The time shares are normalised, so however
+erratic the pacing, the gesture still finishes in the requested duration. Every frame dispatches a
+real `wheel` event, distance is clamped to the page bounds, the flick count is capped so a very
+long page can't spin for minutes, and Stop interrupts a scroll mid-flight.
 
 ## Keyboard shortcuts
 

@@ -500,9 +500,80 @@
 
   const rand = (min, max) => min + Math.random() * (max - min);
 
+  /** Cancellable wait, so Stop works during a human's mid-scroll pause. */
+  async function pause(ms) {
+    const end = performance.now() + ms;
+    while (performance.now() < end) {
+      if (window.__CLICKER_CANCEL__) return;
+      await sleep(Math.min(60, end - performance.now()));
+    }
+  }
+
+  function ease(style, t) {
+    switch (style) {
+      case 'in':
+        return t * t; // hesitate, then accelerate
+      case 'inout':
+        return t < 0.5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
+      case 'linear':
+        return t;
+      case 'stutter':
+        return Math.ceil(t * 4) / 4; // moves in uneven little steps
+      default:
+        return 1 - (1 - t) * (1 - t); // 'out' — quick flick, coast to a stop
+    }
+  }
+
   /**
-   * Scroll a distance the way a person does: a series of quick "flicks" that
-   * decelerate at the end, with jittered frame timing and a beat between flicks.
+   * Plan a gesture: independently randomized flick sizes AND time shares, with
+   * the occasional pause. Time shares are normalised to `dur`, so however erratic
+   * the pacing looks, the gesture still finishes in the requested time.
+   */
+  function buildScrollPlan(dist, dur) {
+    const viewport = window.innerHeight || 800;
+
+    let n = Math.round(dist / (viewport * rand(0.35, 0.65)));
+    n = Math.round(n * rand(0.8, 1.25));
+    n = Math.max(3, Math.min(60, n));
+
+    // Flick sizes: heavy-tailed — tiny nudges, normal flicks, and the odd big throw.
+    const sizeWeights = [];
+    for (let i = 0; i < n; i++) {
+      const r = Math.random();
+      if (r < 0.15) sizeWeights.push(rand(0.05, 0.2));
+      else if (r < 0.75) sizeWeights.push(rand(0.6, 1.2));
+      else sizeWeights.push(rand(1.6, 3.0));
+    }
+    const sizeTotal = sizeWeights.reduce((a, b) => a + b, 0);
+
+    // Time shares: independent of size, so pace and distance don't correlate.
+    const timeWeights = [];
+    const pauseFractions = [];
+    for (let i = 0; i < n; i++) {
+      const r = Math.random();
+      if (r < 0.2) timeWeights.push(rand(0.3, 0.6)); // quick flick
+      else if (r < 0.8) timeWeights.push(rand(0.9, 1.4)); // normal
+      else timeWeights.push(rand(1.6, 2.6)); // slow, deliberate
+      pauseFractions.push(Math.random() < 0.2 ? rand(0.25, 0.55) : 0);
+    }
+    const timeTotal = timeWeights.reduce((a, b) => a + b, 0);
+
+    const styles = ['out', 'out', 'out', 'in', 'inout', 'linear', 'stutter'];
+
+    return sizeWeights.map((w, i) => {
+      const time = (timeWeights[i] / timeTotal) * dur; // shares sum to dur
+      return {
+        size: (w / sizeTotal) * dist, // sizes sum to dist
+        time,
+        move: time * (1 - pauseFractions[i]),
+        style: styles[Math.floor(Math.random() * styles.length)]
+      };
+    });
+  }
+
+  /**
+   * Scroll a distance the way a person does — erratic flicks of varying size and
+   * speed, some jittered, some pausing — but always arriving in `duration` ms.
    */
   async function humanScroll(scroller, delta, duration) {
     const start = scroller.get();
@@ -513,46 +584,44 @@
 
     const sign = Math.sign(total);
     const dur = duration > 0 ? duration : Math.min(6000, Math.max(220, dist * 0.5));
+    const plan = buildScrollPlan(dist, dur);
+    const T0 = performance.now();
 
-    // People flick roughly half a screen at a time; cap the flick count on very long pages.
-    const viewport = window.innerHeight || 800;
-    const maxChunks = 60;
-    let chunkBase = rand(0.3, 0.7) * viewport;
-    if (dist / chunkBase > maxChunks) chunkBase = dist / maxChunks;
+    let travelled = 0; // px covered so far
+    let clock = 0; // ms of the schedule consumed so far
 
-    const chunks = [];
-    for (let remaining = dist; remaining > 0; ) {
-      const c = Math.min(remaining, chunkBase * rand(0.8, 1.2));
-      chunks.push(c);
-      remaining -= c;
-    }
-    const perChunk = dur / chunks.length;
-
-    let travelled = 0;
-    for (const chunk of chunks) {
+    for (let i = 0; i < plan.length; i++) {
       if (window.__CLICKER_CANCEL__) return;
 
+      const seg = plan[i];
       const from = start + sign * travelled;
-      const to = from + sign * chunk;
-      const chunkMs = perChunk * rand(0.75, 1.25);
-      const t0 = performance.now();
-      let prev = from;
+      const to = i === plan.length - 1 ? end : from + sign * seg.size; // land exactly
+      const segStart = clock;
+      clock += seg.time;
 
+      let prev = from;
       for (;;) {
         if (window.__CLICKER_CANCEL__) return;
-        const t = Math.min(1, (performance.now() - t0) / chunkMs);
-        const eased = 1 - Math.pow(1 - t, 2); // ease-out: quick start, slow finish
-        const y = from + (to - from) * eased;
+        const local = performance.now() - T0 - segStart;
+        const t = seg.move > 0 ? Math.min(1, local / seg.move) : 1;
+        const y = from + (to - from) * ease(seg.style, t);
         scroller.set(y);
         emitWheel(scroller, y - prev);
         prev = y;
         if (t >= 1) break;
-        await sleep(rand(9, 19));
+        await sleep(rand(7, 26)); // jittered frame cadence
       }
 
-      travelled += chunk;
-      await sleep(rand(20, 80)); // short beat between flicks
+      // Hold the rest of this slot (a pause, and any drift correction), so the
+      // whole gesture still ends exactly on time.
+      const wait = T0 + clock - performance.now();
+      if (wait > 0) await pause(wait);
+
+      travelled += seg.size;
     }
+
+    const remaining = T0 + dur - performance.now();
+    if (remaining > 0) await pause(remaining);
   }
 
   /** Scroll an element into view (centred) using the same human motion. */
