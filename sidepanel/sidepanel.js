@@ -10,7 +10,9 @@ const ACTIONS = {
   press: { label: 'Key press', pick: true },
   wait: { label: 'Wait', pick: false },
   scroll: { label: 'Scroll', pick: false },
-  navigate: { label: 'Go to URL', pick: false }
+  navigate: { label: 'Go to URL', pick: false },
+  openTab: { label: 'Open tab', pick: false },
+  switchTab: { label: 'Switch tab', pick: false }
 };
 
 const state = {
@@ -45,6 +47,7 @@ async function init() {
   ui.loopFields = $('#loop-fields');
   ui.loopCount = $('#loop-count');
   ui.loopInterval = $('#loop-interval');
+  ui.followToggle = $('#follow-toggle');
 
   bindEvents();
 
@@ -243,6 +246,14 @@ function bindEvents() {
     schedulePersist();
   });
 
+  ui.followToggle.addEventListener('change', () => {
+    const macro = currentMacro();
+    if (!macro) return;
+    macro.followTabs = ui.followToggle.checked;
+    persist();
+    log(macro.followTabs ? 'Following new tabs.' : 'Staying on the tab the macro started on.');
+  });
+
   $('#btn-clear-log').addEventListener('click', () => {
     state.logs = [];
     renderLog();
@@ -258,6 +269,13 @@ function onAddStep(action) {
     addStep({ action: 'wait', ms: 1000 });
   } else if (action === 'scroll') {
     addStep({ action: 'scroll', scope: 'amount', direction: 'down', amount: 600, duration: 0 });
+  } else if (action === 'openTab') {
+    addStep({ action: 'openTab', url: 'https://', activate: true });
+    renderSteps();
+    const urlInput = ui.steps.querySelector('.step:last-child .step-input');
+    if (urlInput) urlInput.focus();
+  } else if (action === 'switchTab') {
+    addStep({ action: 'switchTab', mode: 'newest', url: '', activate: true });
   } else if (action === 'navigate') {
     addStep({ action: 'navigate', url: 'https://' });
     renderSteps();
@@ -320,6 +338,9 @@ function onRuntimeMessage(msg) {
     state.armed = true;
     renderStatus();
 
+  } else if (msg.type === 'TAB_CHANGED') {
+    log(`Tab → ${hostOf(msg.url)}`, 'dim');
+
   } else if (msg.type === 'RUN_LOOP') {
     log(`Loop ${msg.iteration}${msg.total ? ' of ' + msg.total : ''}`, 'dim');
 
@@ -350,6 +371,7 @@ function render() {
   renderMacroSelect();
   renderAuto();
   renderLoop();
+  renderTabs();
   renderSteps();
   renderStatus();
 }
@@ -361,6 +383,12 @@ function renderLoop() {
   ui.loopCount.value = String(macro.loopCount == null ? 0 : macro.loopCount);
   ui.loopInterval.value = String(macro.loopInterval == null ? 1000 : macro.loopInterval);
   ui.loopFields.style.display = macro.loop ? 'flex' : 'none';
+}
+
+function renderTabs() {
+  const macro = currentMacro();
+  if (!macro) return;
+  ui.followToggle.checked = macro.followTabs !== false;
 }
 
 function renderAuto() {
@@ -485,6 +513,32 @@ function buildStepRow(step, idx, total) {
     if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
     body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+  } else if (step.action === 'openTab') {
+    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
+  } else if (step.action === 'switchTab') {
+    body.appendChild(
+      fieldRow(
+        'To',
+        selectInput(
+          [
+            ['newest', 'Newest tab'],
+            ['previous', 'Previous tab'],
+            ['url', 'By URL']
+          ],
+          step.mode || 'newest',
+          (v) => {
+            updateStep(step.id, { mode: v });
+            persist();
+            renderSteps();
+          }
+        )
+      )
+    );
+    if ((step.mode || 'newest') === 'url') {
+      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    }
+    body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   }
 
   row.appendChild(body);
@@ -630,6 +684,25 @@ function textInput(value, onChange) {
   return input;
 }
 
+function checkboxRow(labelText, checked, onChange) {
+  const row = document.createElement('div');
+  row.className = 'field-row';
+
+  const label = document.createElement('span');
+  label.className = 'field-label';
+  label.textContent = labelText;
+
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = !!checked;
+  cb.style.accentColor = '#22c55e';
+  cb.addEventListener('change', () => onChange(cb.checked));
+
+  row.appendChild(label);
+  row.appendChild(cb);
+  return row;
+}
+
 function selectInput(options, value, onChange) {
   const select = document.createElement('select');
   select.className = 'step-input';
@@ -666,6 +739,14 @@ function renderStatus() {
 /* ---------------------------------------------------------------- *
  *  Log                                                             *
  * ---------------------------------------------------------------- */
+
+function hostOf(url) {
+  try {
+    return new URL(url).host || url;
+  } catch (_) {
+    return url || 'new tab';
+  }
+}
 
 function log(text, kind) {
   const now = new Date();

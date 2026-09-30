@@ -18,7 +18,10 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Wait (ms)`,
-  `Scroll` (human-like), `Go to URL` (navigates and continues on the new page).
+  `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`.
+- **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
+  step) moves the rest of the macro onto that new tab, so you can click on site A and continue
+  scrolling on site B.
 - **Manual run + shortcuts** — start a macro from the panel or a keyboard shortcut.
 - **Auto mode** — bind a macro to a URL pattern and it runs by itself whenever a matching page
   finishes loading. No clicking Run.
@@ -87,6 +90,20 @@ frame cadence and the occasional mid-scroll pause. The time shares are normalise
 erratic the pacing, the gesture still finishes in the requested duration. Every frame dispatches a
 real `wheel` event, distance is clamped to the page bounds, the flick count is capped so a very
 long page can't spin for minutes, and Stop interrupts a scroll mid-flight.
+
+## Multiple tabs
+
+A macro is not stuck on the tab it started on. Three things move it around:
+
+- **Follow new tabs** (on by default) — after every step, if that step opened a tab (a click that
+  redirects to a new tab, `window.open`, a form that targets `_blank`), the run adopts it. So:
+  click a button on site A → site B opens → the next step (scroll, click, …) acts on B.
+- **Open tab** step — open a URL in a fresh tab and continue there.
+- **Switch tab** step — move to the **newest** tab, back to the **previous** tab (the run keeps a
+  tab history), or to whichever tab matches a **URL** pattern. Each has an `activate` toggle.
+
+Turn **Follow new tabs** off if you want every step pinned to the starting tab. Tabs that can't be
+scripted (`chrome://`, the Web Store, other extensions) are never adopted.
 
 ## Keyboard shortcuts
 

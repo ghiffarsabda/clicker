@@ -139,7 +139,15 @@ async function runMacro(macroId, opts = {}) {
     return;
   }
 
-  activeRun = { cancelled: false, tabId: tab.id, macroId: macro.id };
+  activeRun = {
+    cancelled: false,
+    tabId: tab.id,
+    windowId: tab.windowId,
+    macroId: macro.id,
+    history: [tab.id],
+    follow: macro.followTabs !== false,
+    stepStartedAt: 0
+  };
 
   // Loop mode: repeat the whole step list `loopCount` times (0 = until stopped).
   const looping = !!macro.loop;
@@ -167,7 +175,9 @@ async function runMacro(macroId, opts = {}) {
           iteration: looping ? iteration : null,
           iterations: totalLabel
         });
-        await runStep(tab.id, step);
+        activeRun.stepStartedAt = Date.now();
+        await runStep(step);
+        if (activeRun.follow) await maybeFollowNewTab();
       }
 
       if (iteration < limit && interval > 0) await cancellableSleep(interval);
@@ -194,7 +204,10 @@ async function runMacro(macroId, opts = {}) {
   }
 }
 
-async function runStep(tabId, step) {
+async function runStep(step) {
+  const tabId = activeRun && activeRun.tabId;
+  if (!tabId) throw new Error('No active tab');
+
   if (step.action === 'wait') {
     await sleep(Math.max(0, Number(step.ms) || 0));
     return;
@@ -213,11 +226,31 @@ async function runStep(tabId, step) {
     return;
   }
 
+  if (step.action === 'openTab') {
+    if (!step.url) throw new Error('Open tab step has no URL');
+    const created = await chrome.tabs.create({ url: step.url, active: step.activate !== false });
+    await waitForNewTabUrl(created.id);
+    await ensureAgent(created.id);
+    adoptTab(created.id);
+    return;
+  }
+
+  if (step.action === 'switchTab') {
+    const target = await resolveSwitchTarget(step);
+    if (!target) throw new Error('No matching tab to switch to');
+    if (step.activate !== false) await chrome.tabs.update(target.id, { active: true }).catch(() => {});
+    adoptTab(target.id);
+    await ensureAgent(target.id);
+    return;
+  }
+
+  await ensureAgent(tabId);
+
   let res;
   try {
     res = await chrome.tabs.sendMessage(tabId, { type: 'EXECUTE_STEP', step });
   } catch (e) {
-    throw new Error('Could not reach the page — it may have navigated or reloaded');
+    throw new Error('Could not reach the page — it may have navigated, closed, or reloaded');
   }
   if (!res || !res.ok) throw new Error((res && res.error) || `Step failed: ${step.action}`);
 }
@@ -271,6 +304,93 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => lastAutoRun.delete(tabId));
+
+/* ---------------------------------------------------------------- *
+ *  Multi-tab control                                               *
+ * ---------------------------------------------------------------- */
+
+const recentTabs = []; // tabs observed as they are created
+
+chrome.tabs.onCreated.addListener((tab) => {
+  if (!tab || tab.id == null) return;
+  recentTabs.push({
+    id: tab.id,
+    openerTabId: tab.openerTabId,
+    windowId: tab.windowId,
+    time: Date.now(),
+    consumed: false
+  });
+  if (recentTabs.length > 40) recentTabs.splice(0, recentTabs.length - 40);
+});
+
+/** Point the run at a different tab and tell the panel about it. */
+function adoptTab(tabId) {
+  if (!activeRun || activeRun.tabId === tabId) return;
+  activeRun.tabId = tabId;
+  activeRun.history.push(tabId);
+  if (activeRun.history.length > 20) activeRun.history.shift();
+  chrome.tabs
+    .get(tabId)
+    .then((t) => emit({ type: 'TAB_CHANGED', tabId, url: t.url, title: t.title }))
+    .catch(() => {});
+}
+
+/** Wait for a freshly opened tab to finish loading a real page. */
+async function waitForNewTabUrl(tabId, timeout = 25000) {
+  const started = Date.now();
+  for (;;) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab && tab.status === 'complete' && tab.url && !/^(about:blank|chrome:\/\/newtab)/i.test(tab.url)) {
+      return tab;
+    }
+    if (Date.now() - started > timeout) throw new Error('New tab did not finish loading');
+    await sleep(250);
+  }
+}
+
+/**
+ * If the step just run opened a tab (a click that redirects, window.open, …),
+ * move the run onto it so following steps act on the new site.
+ */
+async function maybeFollowNewTab() {
+  if (!activeRun || !activeRun.follow) return;
+  const since = activeRun.stepStartedAt || 0;
+  const candidates = () =>
+    recentTabs.filter(
+      (t) => !t.consumed && t.time >= since && t.windowId === activeRun.windowId && t.id !== activeRun.tabId
+    );
+
+  let pick = candidates().find((t) => t.openerTabId === activeRun.tabId);
+  if (!pick) {
+    await sleep(150); // a delayed window.open() may not have fired yet
+    const later = candidates();
+    pick = later.find((t) => t.openerTabId === activeRun.tabId) || (later.length === 1 ? later[0] : null);
+  }
+  if (!pick) return;
+
+  pick.consumed = true;
+  const tab = await chrome.tabs.get(pick.id).catch(() => null);
+  if (!tab || isRestricted(tab)) return;
+
+  await waitForNewTabUrl(pick.id).catch(() => {});
+  await ensureAgent(pick.id).catch(() => {});
+  adoptTab(pick.id);
+}
+
+async function resolveSwitchTarget(step) {
+  const all = await chrome.tabs.query({ windowId: activeRun.windowId });
+
+  if (step.mode === 'previous') {
+    const prevId = activeRun.history[activeRun.history.length - 2];
+    return all.find((t) => t.id === prevId) || null;
+  }
+
+  const others = all.filter((t) => t.id !== activeRun.tabId && !isRestricted(t));
+  if (step.mode === 'url') {
+    return others.filter((t) => urlMatches(step.url || '', t.url || ''))[0] || null;
+  }
+  return others.slice().sort((a, b) => (b.id || 0) - (a.id || 0))[0] || null; // newest
+}
 
 /* ---------------------------------------------------------------- *
  *  Message router                                                  *
