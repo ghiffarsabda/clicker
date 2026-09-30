@@ -223,7 +223,10 @@ async function runStep(tabId, step) {
 }
 
 function stopRun() {
-  if (activeRun) activeRun.cancelled = true;
+  if (!activeRun) return;
+  activeRun.cancelled = true;
+  // Interrupt a long step in progress (e.g. a human-like scroll) right away.
+  chrome.tabs.sendMessage(activeRun.tabId, { type: 'CANCEL_EXECUTION' }).catch(() => {});
 }
 
 /* ---------------------------------------------------------------- *

@@ -31,6 +31,10 @@
           .then((r) => sendResponse(r))
           .catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err) }));
         return true;
+      case 'CANCEL_EXECUTION':
+        window.__CLICKER_CANCEL__ = true;
+        sendResponse({ ok: true });
+        return true;
     }
     return true;
   });
@@ -321,7 +325,8 @@
 
     const box = overlay.querySelector('#clicker-pick-box');
     const label = overlay.querySelector('#clicker-pick-label');
-    overlay.querySelector('#clicker-pick-mode').textContent = mode === 'type' ? 'type into' : mode === 'press' ? 'press a key on' : 'click';
+    overlay.querySelector('#clicker-pick-mode').textContent =
+      mode === 'type' ? 'type into' : mode === 'press' ? 'press a key on' : mode === 'scroll' ? 'scroll to' : 'click';
 
     const onMove = (e) => {
       const el = elementAtPoint(e.clientX, e.clientY);
@@ -447,14 +452,144 @@
     target.dispatchEvent(new KeyboardEvent('keyup', base));
   }
 
+  /* ------------------------------------------------------------------ *
+   *  Human-like scrolling                                               *
+   * ------------------------------------------------------------------ */
+
+  function windowScroller() {
+    const el = document.scrollingElement || document.documentElement;
+    return {
+      el,
+      get: () => window.scrollY,
+      max: () => Math.max(0, el.scrollHeight - window.innerHeight),
+      set: (y) => window.scrollTo(0, y)
+    };
+  }
+
+  function containerScroller(el) {
+    return {
+      el,
+      get: () => el.scrollTop,
+      max: () => Math.max(0, el.scrollHeight - el.clientHeight),
+      set: (y) => {
+        el.scrollTop = y;
+      }
+    };
+  }
+
+  function scrollableAncestor(el) {
+    let node = el && el.parentElement;
+    while (node && node !== document.body && node !== document.documentElement) {
+      const st = getComputedStyle(node);
+      if (/(auto|scroll|overlay)/.test(st.overflowY) && node.scrollHeight > node.clientHeight + 4) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /** Fire a wheel event so apps that listen for scrolling react like a real user. */
+  function emitWheel(scroller, deltaY) {
+    if (!deltaY) return;
+    const target = scroller.el || document.scrollingElement;
+    try {
+      target.dispatchEvent(
+        new WheelEvent('wheel', { deltaY, deltaX: 0, deltaMode: 0, bubbles: true, cancelable: true })
+      );
+    } catch (_) {}
+  }
+
+  const rand = (min, max) => min + Math.random() * (max - min);
+
+  /**
+   * Scroll a distance the way a person does: a series of quick "flicks" that
+   * decelerate at the end, with jittered frame timing and a beat between flicks.
+   */
+  async function humanScroll(scroller, delta, duration) {
+    const start = scroller.get();
+    const end = Math.max(0, Math.min(scroller.max(), start + delta));
+    const total = end - start;
+    const dist = Math.abs(total);
+    if (dist < 1) return;
+
+    const sign = Math.sign(total);
+    const dur = duration > 0 ? duration : Math.min(3000, Math.max(200, dist * 0.6));
+
+    const chunks = [];
+    for (let remaining = dist; remaining > 0; ) {
+      const c = Math.min(remaining, rand(250, 600));
+      chunks.push(c);
+      remaining -= c;
+    }
+    const perChunk = dur / chunks.length;
+
+    let travelled = 0;
+    for (const chunk of chunks) {
+      if (window.__CLICKER_CANCEL__) return;
+
+      const from = start + sign * travelled;
+      const to = from + sign * chunk;
+      const chunkMs = perChunk * rand(0.75, 1.25);
+      const t0 = performance.now();
+      let prev = from;
+
+      for (;;) {
+        if (window.__CLICKER_CANCEL__) return;
+        const t = Math.min(1, (performance.now() - t0) / chunkMs);
+        const eased = 1 - Math.pow(1 - t, 2); // ease-out: quick start, slow finish
+        const y = from + (to - from) * eased;
+        scroller.set(y);
+        emitWheel(scroller, y - prev);
+        prev = y;
+        if (t >= 1) break;
+        await sleep(rand(9, 19));
+      }
+
+      travelled += chunk;
+      await sleep(rand(20, 80)); // short beat between flicks
+    }
+  }
+
+  /** Scroll an element into view (centred) using the same human motion. */
+  async function scrollToElement(el, duration) {
+    const container = scrollableAncestor(el);
+    if (container) {
+      const er = el.getBoundingClientRect();
+      const cr = container.getBoundingClientRect();
+      const centre = er.top - cr.top + container.scrollTop - (container.clientHeight - er.height) / 2;
+      await humanScroll(containerScroller(container), centre - container.scrollTop, duration);
+      return;
+    }
+    const er = el.getBoundingClientRect();
+    const centre = window.scrollY + er.top - (window.innerHeight - er.height) / 2;
+    await humanScroll(windowScroller(), centre - window.scrollY, duration);
+  }
+
+  async function runScrollStep(step) {
+    const duration = Math.max(0, Number(step.duration) || 0);
+    if (step.target) {
+      const el = resolveTarget(step.target, { textMatch: !!step.textMatch });
+      if (!el) throw new Error('Element not found: ' + ((step.target && step.target.selector) || 'unknown'));
+      await scrollToElement(el, duration);
+      return;
+    }
+    const amount = Math.max(1, Number(step.amount) || 600);
+    await humanScroll(windowScroller(), (step.direction === 'up' ? -1 : 1) * amount, duration);
+  }
+
   async function executeStep(step) {
     if (!step || !step.action) throw new Error('Invalid step');
+    window.__CLICKER_CANCEL__ = false;
+
     if (step.action === 'wait') {
       await sleep(Math.max(0, Number(step.ms) || 0));
       return { ok: true };
     }
     if (step.action === 'navigate') {
       return { ok: true, deferred: true }; // background performs the navigation
+    }
+    if (step.action === 'scroll') {
+      await runScrollStep(step);
+      return { ok: true };
     }
 
     const el = resolveTarget(step.target, { textMatch: !!step.textMatch });

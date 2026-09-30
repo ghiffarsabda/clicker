@@ -9,6 +9,7 @@ const ACTIONS = {
   type: { label: 'Type', pick: true },
   press: { label: 'Key press', pick: true },
   wait: { label: 'Wait', pick: false },
+  scroll: { label: 'Scroll', pick: false },
   navigate: { label: 'Go to URL', pick: false }
 };
 
@@ -255,6 +256,8 @@ function onAddStep(action) {
   }
   if (action === 'wait') {
     addStep({ action: 'wait', ms: 1000 });
+  } else if (action === 'scroll') {
+    addStep({ action: 'scroll', direction: 'down', amount: 600, duration: 0 });
   } else if (action === 'navigate') {
     addStep({ action: 'navigate', url: 'https://' });
     renderSteps();
@@ -438,6 +441,26 @@ function buildStepRow(step, idx, total) {
     body.appendChild(
       fieldRow('ms', numberInput(step.ms || 0, (v) => updateStep(step.id, { ms: v })))
     );
+  } else if (step.action === 'scroll') {
+    body.appendChild(buildScrollTarget(step));
+    body.appendChild(
+      fieldRow(
+        'Dir',
+        selectInput(
+          [
+            ['down', 'Down'],
+            ['up', 'Up']
+          ],
+          step.direction || 'down',
+          (v) => updateStep(step.id, { direction: v })
+        )
+      )
+    );
+    body.appendChild(fieldRow('Px', numberInput(step.amount == null ? 600 : step.amount, (v) => updateStep(step.id, { amount: v }))));
+    body.appendChild(
+      fieldRow('Time', numberInput(step.duration == null ? 0 : step.duration, (v) => updateStep(step.id, { duration: v })))
+    );
+    if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
     body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
   }
@@ -475,6 +498,50 @@ function buildTargetBlock(step) {
   repick.textContent = 're-pick element';
   repick.addEventListener('click', () => startPick(step.action, step.id));
   wrap.appendChild(repick);
+
+  return wrap;
+}
+
+function buildScrollTarget(step) {
+  const wrap = document.createElement('div');
+  wrap.className = 'target';
+
+  if (step.target) {
+    const label = document.createElement('div');
+    label.className = 'target-label';
+    label.title = step.target.label || '';
+    label.textContent = step.target.label || step.target.selector || 'element';
+
+    const selector = document.createElement('div');
+    selector.className = 'selector';
+    selector.textContent = step.target.selector || '(no selector)';
+
+    wrap.appendChild(label);
+    wrap.appendChild(selector);
+  } else {
+    const hint = document.createElement('div');
+    hint.className = 'target-label';
+    hint.textContent = 'Scroll the page, or pick an element to scroll to:';
+    wrap.appendChild(hint);
+  }
+
+  const pick = document.createElement('button');
+  pick.className = 'repick-btn';
+  pick.textContent = step.target ? 're-pick element' : 'scroll to element…';
+  pick.addEventListener('click', () => startPick('scroll', step.id));
+  wrap.appendChild(pick);
+
+  if (step.target) {
+    const clear = document.createElement('button');
+    clear.className = 'repick-btn';
+    clear.textContent = 'clear (scroll by amount)';
+    clear.addEventListener('click', () => {
+      updateStep(step.id, { target: null });
+      persist();
+      renderSteps();
+    });
+    wrap.appendChild(clear);
+  }
 
   return wrap;
 }
@@ -539,6 +606,20 @@ function textInput(value, onChange) {
   input.value = value;
   input.addEventListener('input', () => onChange(input.value));
   return input;
+}
+
+function selectInput(options, value, onChange) {
+  const select = document.createElement('select');
+  select.className = 'step-input';
+  for (const [val, label] of options) {
+    const opt = document.createElement('option');
+    opt.value = val;
+    opt.textContent = label;
+    if (val === value) opt.selected = true;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', () => onChange(select.value));
+  return select;
 }
 
 function numberInput(value, onChange) {

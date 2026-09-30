@@ -18,7 +18,7 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Wait (ms)`,
-  `Go to URL` (navigates and continues on the new page).
+  `Scroll` (human-like), `Go to URL` (navigates and continues on the new page).
 - **Manual run + shortcuts** — start a macro from the panel or a keyboard shortcut.
 - **Auto mode** — bind a macro to a URL pattern and it runs by itself whenever a matching page
   finishes loading. No clicking Run.
@@ -68,6 +68,20 @@ Turn on **Loop mode** to repeat the whole step list:
 Stop is honoured mid-pass and mid-wait, and a failing step aborts the loop instead of spinning
 forever. Combine with **Auto mode** for continuous background automation on a matching page —
 keep the panel open so the activity log and Stop are at hand.
+
+## Scroll step
+
+The **Scroll** step moves the page like a person would, not with one instant jump:
+
+- **Dir / Px / Time** — scroll `up`/`down` by a pixel amount, `Time` = duration in ms
+  (`0` = auto, scaled to distance).
+- **scroll to element…** — optionally pick an element instead; the page scrolls until it is
+  centred (handles nested scroll containers too).
+
+The motion is a series of quick "flicks" with ease-out deceleration, jittered frame timing and a
+short beat between flicks, and each frame dispatches a real `wheel` event so apps that listen for
+scrolling react the same way. Distance is clamped to the page bounds, and Stop interrupts a
+scroll mid-flight.
 
 ## Keyboard shortcuts
 
