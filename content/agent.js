@@ -512,11 +512,17 @@
     if (dist < 1) return;
 
     const sign = Math.sign(total);
-    const dur = duration > 0 ? duration : Math.min(3000, Math.max(200, dist * 0.6));
+    const dur = duration > 0 ? duration : Math.min(6000, Math.max(220, dist * 0.5));
+
+    // People flick roughly half a screen at a time; cap the flick count on very long pages.
+    const viewport = window.innerHeight || 800;
+    const maxChunks = 60;
+    let chunkBase = rand(0.3, 0.7) * viewport;
+    if (dist / chunkBase > maxChunks) chunkBase = dist / maxChunks;
 
     const chunks = [];
     for (let remaining = dist; remaining > 0; ) {
-      const c = Math.min(remaining, rand(250, 600));
+      const c = Math.min(remaining, chunkBase * rand(0.8, 1.2));
       chunks.push(c);
       remaining -= c;
     }
@@ -572,8 +578,17 @@
       await scrollToElement(el, duration);
       return;
     }
+    const scroller = windowScroller();
+    const scope = step.scope || (step.toEnd ? 'bottom' : 'amount');
+
+    if (scope === 'bottom' || scope === 'top') {
+      const destination = scope === 'bottom' ? scroller.max() : 0;
+      await humanScroll(scroller, destination - scroller.get(), duration);
+      return;
+    }
+
     const amount = Math.max(1, Number(step.amount) || 600);
-    await humanScroll(windowScroller(), (step.direction === 'up' ? -1 : 1) * amount, duration);
+    await humanScroll(scroller, (step.direction === 'up' ? -1 : 1) * amount, duration);
   }
 
   async function executeStep(step) {

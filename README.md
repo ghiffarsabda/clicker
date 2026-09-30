@@ -73,15 +73,17 @@ keep the panel open so the activity log and Stop are at hand.
 
 The **Scroll** step moves the page like a person would, not with one instant jump:
 
-- **Dir / Px / Time** — scroll `up`/`down` by a pixel amount, `Time` = duration in ms
-  (`0` = auto, scaled to distance).
+- **Mode** — `By amount` (scroll `up`/`down` by a pixel distance), `To bottom` (run to the end of
+  the page, however long it is), or `To top`.
+- **Time** — duration in ms (`0` = auto, scaled to distance).
 - **scroll to element…** — optionally pick an element instead; the page scrolls until it is
   centred (handles nested scroll containers too).
 
-The motion is a series of quick "flicks" with ease-out deceleration, jittered frame timing and a
-short beat between flicks, and each frame dispatches a real `wheel` event so apps that listen for
-scrolling react the same way. Distance is clamped to the page bounds, and Stop interrupts a
-scroll mid-flight.
+The motion is a series of quick "flicks" — about half a screen each, with ease-out deceleration,
+jittered frame timing and a short beat between flicks — and each frame dispatches a real `wheel`
+event so apps that listen for scrolling react the same way. Distance is clamped to the page
+bounds, the flick count is capped so a very long page can't spin for minutes, and Stop interrupts
+a scroll mid-flight.
 
 ## Keyboard shortcuts
 

@@ -257,7 +257,7 @@ function onAddStep(action) {
   if (action === 'wait') {
     addStep({ action: 'wait', ms: 1000 });
   } else if (action === 'scroll') {
-    addStep({ action: 'scroll', direction: 'down', amount: 600, duration: 0 });
+    addStep({ action: 'scroll', scope: 'amount', direction: 'down', amount: 600, duration: 0 });
   } else if (action === 'navigate') {
     addStep({ action: 'navigate', url: 'https://' });
     renderSteps();
@@ -445,18 +445,40 @@ function buildStepRow(step, idx, total) {
     body.appendChild(buildScrollTarget(step));
     body.appendChild(
       fieldRow(
-        'Dir',
+        'Mode',
         selectInput(
           [
-            ['down', 'Down'],
-            ['up', 'Up']
+            ['amount', 'By amount'],
+            ['bottom', 'To bottom'],
+            ['top', 'To top']
           ],
-          step.direction || 'down',
-          (v) => updateStep(step.id, { direction: v })
+          step.scope || (step.toEnd ? 'bottom' : 'amount'),
+          (v) => {
+            updateStep(step.id, { scope: v });
+            persist();
+            renderSteps();
+          }
         )
       )
     );
-    body.appendChild(fieldRow('Px', numberInput(step.amount == null ? 600 : step.amount, (v) => updateStep(step.id, { amount: v }))));
+
+    if ((step.scope || 'amount') === 'amount') {
+      body.appendChild(
+        fieldRow(
+          'Dir',
+          selectInput(
+            [
+              ['down', 'Down'],
+              ['up', 'Up']
+            ],
+            step.direction || 'down',
+            (v) => updateStep(step.id, { direction: v })
+          )
+        )
+      );
+      body.appendChild(fieldRow('Px', numberInput(step.amount == null ? 600 : step.amount, (v) => updateStep(step.id, { amount: v }))));
+    }
+
     body.appendChild(
       fieldRow('Time', numberInput(step.duration == null ? 0 : step.duration, (v) => updateStep(step.id, { duration: v })))
     );
