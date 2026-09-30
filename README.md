@@ -105,6 +105,15 @@ A macro is not stuck on the tab it started on. Three things move it around:
 Turn **Follow new tabs** off if you want every step pinned to the starting tab. Tabs that can't be
 scripted (`chrome://`, the Web Store, other extensions) are never adopted.
 
+Two things to know when a tab doesn't move the run:
+
+- A synthetic click carries **no user activation**, so a page's own `window.open()` can be blocked
+  by the popup blocker and no tab ever appears. When a click was on a link and nothing happened,
+  the worker opens the link itself — logged as *"Opened … directly (the page's own popup was
+  blocked)"*.
+- The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
+  step actually ran on.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |

@@ -146,7 +146,8 @@ async function runMacro(macroId, opts = {}) {
     macroId: macro.id,
     history: [tab.id],
     follow: macro.followTabs !== false,
-    stepStartedAt: 0
+    startedAt: Date.now(),
+    stepStartedAt: Date.now()
   };
 
   // Loop mode: repeat the whole step list `loopCount` times (0 = until stopped).
@@ -167,6 +168,10 @@ async function runMacro(macroId, opts = {}) {
       for (let i = 0; i < macro.steps.length; i++) {
         if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
         const step = macro.steps[i];
+
+        // A previous step may have opened a tab after a delay — move onto it first.
+        if (activeRun.follow) await maybeFollowNewTab();
+
         emit({
           type: 'RUN_PROGRESS',
           index: i,
@@ -176,8 +181,13 @@ async function runMacro(macroId, opts = {}) {
           iterations: totalLabel
         });
         activeRun.stepStartedAt = Date.now();
-        await runStep(step);
-        if (activeRun.follow) await maybeFollowNewTab();
+        const res = await runStep(step);
+
+        // Catch a tab this step just opened, so the following step can use it.
+        const adopted = activeRun.follow ? await maybeFollowNewTab() : null;
+        if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
+          await openLinkFallback(res.link, res.urlBefore);
+        }
       }
 
       if (iteration < limit && interval > 0) await cancellableSleep(interval);
@@ -246,6 +256,14 @@ async function runStep(step) {
 
   await ensureAgent(tabId);
 
+  const urlBefore =
+    step.action === 'click'
+      ? await chrome.tabs
+          .get(tabId)
+          .then((t) => t.url || '')
+          .catch(() => '')
+      : '';
+
   let res;
   try {
     res = await chrome.tabs.sendMessage(tabId, { type: 'EXECUTE_STEP', step });
@@ -253,6 +271,35 @@ async function runStep(step) {
     throw new Error('Could not reach the page — it may have navigated, closed, or reloaded');
   }
   if (!res || !res.ok) throw new Error((res && res.error) || `Step failed: ${step.action}`);
+  return Object.assign({}, res, { urlBefore });
+}
+
+/**
+ * A synthetic click carries no user activation, so a page's own window.open()
+ * can be blocked by the popup blocker and no tab ever appears. If the click was
+ * on a link and nothing happened, open it ourselves — that is what makes
+ * "click on site A, continue on site B" reliable.
+ */
+async function openLinkFallback(link, urlBefore) {
+  const current = await chrome.tabs.get(activeRun.tabId).catch(() => null);
+  if (!current) return;
+  if (urlBefore && current.url !== urlBefore) return; // the page navigated on its own
+  if (current.status === 'loading') return; // a navigation is already under way
+
+  emit({ type: 'NOTE', text: `Opened ${link.href} directly (the page's own popup was blocked)` });
+
+  if (link.target === '_blank') {
+    const created = await chrome.tabs.create({ url: link.href, active: true });
+    await waitForNewTabUrl(created.id).catch(() => {});
+    await ensureAgent(created.id).catch(() => {});
+    adoptTab(created.id);
+    return;
+  }
+
+  await chrome.tabs.update(activeRun.tabId, { url: link.href });
+  await waitForTabComplete(activeRun.tabId, urlBefore || '');
+  await sleep(250);
+  await ensureAgent(activeRun.tabId);
 }
 
 function stopRun() {
@@ -325,6 +372,11 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 /** Point the run at a different tab and tell the panel about it. */
 function adoptTab(tabId) {
+  if (tabId != null) {
+    // A tab we deliberately adopted must never be auto-followed again.
+    const entry = recentTabs.find((t) => t.id === tabId);
+    if (entry) entry.consumed = true;
+  }
   if (!activeRun || activeRun.tabId === tabId) return;
   activeRun.tabId = tabId;
   activeRun.history.push(tabId);
@@ -349,32 +401,42 @@ async function waitForNewTabUrl(tabId, timeout = 25000) {
 }
 
 /**
- * If the step just run opened a tab (a click that redirects, window.open, …),
- * move the run onto it so following steps act on the new site.
+ * If a step opened a tab (a click that redirects, window.open, …), move the run
+ * onto it so following steps act on the new site.
+ *
+ * The window is the whole run, not the current step: the tab can appear well
+ * after the click handler returns (JS redirects, async handlers), and a later
+ * step must still be able to pick it up. This is called before *and* after each
+ * step, and is cheap — no sleeping.
+ * @returns the tab id that was adopted, or null.
  */
 async function maybeFollowNewTab() {
-  if (!activeRun || !activeRun.follow) return;
-  const since = activeRun.stepStartedAt || 0;
-  const candidates = () =>
-    recentTabs.filter(
-      (t) => !t.consumed && t.time >= since && t.windowId === activeRun.windowId && t.id !== activeRun.tabId
-    );
+  if (!activeRun || !activeRun.follow) return null;
+  const since = activeRun.startedAt || 0;
 
-  let pick = candidates().find((t) => t.openerTabId === activeRun.tabId);
-  if (!pick) {
-    await sleep(150); // a delayed window.open() may not have fired yet
-    const later = candidates();
-    pick = later.find((t) => t.openerTabId === activeRun.tabId) || (later.length === 1 ? later[0] : null);
-  }
-  if (!pick) return;
+  const candidates = recentTabs.filter(
+    (t) =>
+      !t.consumed &&
+      t.time >= since &&
+      t.windowId === activeRun.windowId &&
+      t.id !== activeRun.tabId &&
+      !activeRun.history.includes(t.id) // never yank back to a tab we already used
+  );
+  if (!candidates.length) return null;
+
+  // Prefer the tab whose opener is the tab we're on; otherwise take the only candidate.
+  const pick =
+    candidates.find((t) => t.openerTabId === activeRun.tabId) || (candidates.length === 1 ? candidates[0] : null);
+  if (!pick) return null;
 
   pick.consumed = true;
   const tab = await chrome.tabs.get(pick.id).catch(() => null);
-  if (!tab || isRestricted(tab)) return;
+  if (!tab || isRestricted(tab)) return null;
 
   await waitForNewTabUrl(pick.id).catch(() => {});
   await ensureAgent(pick.id).catch(() => {});
   adoptTab(pick.id);
+  return pick.id;
 }
 
 async function resolveSwitchTarget(step) {

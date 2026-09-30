@@ -639,6 +639,31 @@
     await humanScroll(windowScroller(), centre - window.scrollY, duration);
   }
 
+  /**
+   * What actually scrolls this page? Normally the window, but plenty of sites
+   * put the main content in an inner scroll container — fall back to the largest
+   * one, otherwise a scroll step would silently do nothing.
+   */
+  function primaryScroller() {
+    const win = windowScroller();
+    if (win.max() > 4) return win;
+
+    let best = null;
+    let bestArea = 0;
+    for (const el of document.querySelectorAll('body *')) {
+      if (el.clientHeight < 100) continue;
+      if (el.scrollHeight <= el.clientHeight + 4) continue;
+      const st = getComputedStyle(el);
+      if (!/(auto|scroll|overlay)/.test(st.overflowY)) continue;
+      const area = el.clientWidth * el.clientHeight;
+      if (area > bestArea) {
+        bestArea = area;
+        best = el;
+      }
+    }
+    return best ? containerScroller(best) : win;
+  }
+
   async function runScrollStep(step) {
     const duration = Math.max(0, Number(step.duration) || 0);
     if (step.target) {
@@ -647,7 +672,8 @@
       await scrollToElement(el, duration);
       return;
     }
-    const scroller = windowScroller();
+
+    const scroller = primaryScroller();
     const scope = step.scope || (step.toEnd ? 'bottom' : 'amount');
 
     if (scope === 'bottom' || scope === 'top') {
@@ -683,9 +709,15 @@
     await sleep(60);
 
     switch (step.action) {
-      case 'click':
+      case 'click': {
         performClick(el);
-        break;
+        // Report the link target so the worker can recover if the page's own
+        // window.open() gets popup-blocked (synthetic clicks have no user activation).
+        const anchor = typeof el.closest === 'function' ? el.closest('a[href]') : null;
+        const href = anchor && anchor.href;
+        const link = href && /^https?:/i.test(href) ? { href, target: anchor.getAttribute('target') || '' } : null;
+        return { ok: true, matched: step.target && step.target.selector, link };
+      }
       case 'type':
         setNativeValue(el, step.value == null ? '' : String(step.value));
         break;

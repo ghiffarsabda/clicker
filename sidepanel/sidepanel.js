@@ -338,8 +338,11 @@ function onRuntimeMessage(msg) {
     state.armed = true;
     renderStatus();
 
+  } else if (msg.type === 'NOTE') {
+    log(msg.text, 'dim');
+
   } else if (msg.type === 'TAB_CHANGED') {
-    log(`Tab → ${hostOf(msg.url)}`, 'dim');
+    log(`Tab → ${hostOf(msg.url)}`, 'ok');
 
   } else if (msg.type === 'RUN_LOOP') {
     log(`Loop ${msg.iteration}${msg.total ? ' of ' + msg.total : ''}`, 'dim');
