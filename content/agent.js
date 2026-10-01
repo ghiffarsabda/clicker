@@ -682,10 +682,11 @@
   /**
    * Scan for a target until it shows up — for elements that come and go
    * (whack-a-mole buttons) rather than being on the page from the first try.
-   * The first check is immediate; returns null if it never appears in time.
+   * The first check is immediate; a timeout of 0 means scan until stopped.
    */
   async function waitForTarget(target, timeoutMs, intervalMs, opts) {
-    const deadline = performance.now() + Math.max(0, Number(timeoutMs) || 0);
+    const timeout = Number(timeoutMs) || 0;
+    const deadline = timeout > 0 ? performance.now() + timeout : Infinity;
     const every = Math.max(50, Number(intervalMs) || 250);
 
     for (;;) {
@@ -695,8 +696,14 @@
 
       const left = deadline - performance.now();
       if (left <= 0) return null;
-      await sleep(Math.min(every, left));
+      await sleep(Math.min(every, Number.isFinite(left) ? left : every));
     }
+  }
+
+  /** Explicit 0 means "no timeout"; missing/blank falls back to the default. */
+  function timeoutValue(raw, fallback) {
+    if (raw === undefined || raw === null || raw === '') return fallback;
+    return Math.max(0, Number(raw) || 0);
   }
 
   /** Find a target, optionally scanning for it first when the step asks for it. */
@@ -848,10 +855,14 @@
     }
 
     if (step.action === 'scan') {
-      const timeout = Math.max(0, Number(step.timeout) || 10000);
+      const timeout = timeoutValue(step.timeout, 10000);
       const el = await waitForTarget(step.target, timeout, step.interval, { textMatch: !!step.textMatch });
       if (!el && !step.optional) {
-        throw new Error(`Scanned for ${timeout}ms but never found: ${describeTarget(step.target)}`);
+        throw new Error(
+          timeout > 0
+            ? `Scanned for ${timeout}ms but never found: ${describeTarget(step.target)}`
+            : `Stopped before the element appeared: ${describeTarget(step.target)}`
+        );
       }
       return { ok: true, found: !!el };
     }

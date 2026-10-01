@@ -55,6 +55,16 @@ async function currentUrl(tabId) {
     .catch(() => '');
 }
 
+/**
+ * Timeouts are user-facing: an explicit 0 means "no timeout / wait forever",
+ * while missing or blank falls back to the default. (A plain `|| default` would
+ * wrongly turn 0 into the default.)
+ */
+function timeoutValue(raw, fallback) {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  return Math.max(0, Number(raw) || 0);
+}
+
 function isRestricted(tab) {
   if (!tab || !tab.url) return true;
   return RESTRICTED.test(tab.url) || RESTRICTED_HOST.test(tab.url);
@@ -686,7 +696,8 @@ async function readTargetText(tabId, step) {
  * which is how you say "if it's still the same page as last time, wait".
  */
 async function runWaitChange(step, tabId) {
-  const timeout = Math.max(0, Number(step.timeout) || 20000);
+  const timeout = timeoutValue(step.timeout, 20000);
+  const indefinite = timeout <= 0; // 0 = wait until it changes (or Stop)
   const every = Math.max(100, Number(step.interval) || 300);
   const watchUrl = (step.watch || 'url') === 'url';
 
@@ -701,12 +712,17 @@ async function runWaitChange(step, tabId) {
 
     if ((await read()) !== baseline) return;
 
+    if (indefinite) {
+      await sleep(every);
+      continue;
+    }
+
     const left = timeout - (Date.now() - started);
     if (left <= 0) {
       if (step.optional) return;
       throw new Error(watchUrl ? `URL did not change within ${timeout}ms` : `Text did not change within ${timeout}ms`);
     }
-    await sleep(Math.min(every, left));
+    await sleep(Math.min(every, Math.max(1, left)));
   }
 }
 

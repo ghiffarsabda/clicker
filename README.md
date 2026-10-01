@@ -129,8 +129,8 @@ For loops that should not re-run until the page actually moves on:
   - **since last loop** (URL only) — the baseline is the URL remembered from the *previous loop
     iteration*, so this is exactly *"if the URL is still the same as last time, wait until it
     changes"*. Unticked, the baseline is the URL when the step starts.
-  - `Timeout` (default 20s), `Every` (poll interval, default 300ms), and `optional` to continue
-    instead of erroring if nothing changes in time.
+  - `Timeout` (default 20s) and `Every` (poll interval, default 300ms). **`0` means wait forever**
+    (until Stop); leave it blank to keep the default. `optional` continues instead of erroring.
 - **If → URL changed** condition — true when the URL differs from the previous loop iteration
   (the first pass counts as changed, so it always proceeds). Use it to guard a whole branch.
 
@@ -160,9 +160,10 @@ The activity log reports which branch was taken, and nested steps are indented.
 Some buttons aren't on the page when the macro arrives. Two ways to wait for them — both check
 immediately, then keep re-checking:
 
-- **Scan step** — poll for a picked element until it appears. `Timeout` (ms, default 10000) and
-  `Every` (poll interval, default 250). It errors if the element never shows up, unless
-  **optional** is ticked, in which case the run continues (handy inside a loop that keeps hunting).
+- **Scan step** — poll for a picked element until it appears. `Timeout` (ms, default 10000;
+  **`0` = forever**) and `Every` (poll interval, default 250). It errors if the element never shows
+  up, unless **optional** is ticked, in which case the run continues (handy inside a loop that keeps
+  hunting).
 - **`Scan ms`** on a `Click` / `Type` / `Key` step — that step retries *its own* element for the
   given time before failing. `0` (the default) keeps the old fail-fast behaviour.
 

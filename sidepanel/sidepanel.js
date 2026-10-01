@@ -883,9 +883,12 @@ function buildStepRow(step, idx, total, path) {
       body.appendChild(checkboxRow('since last loop', step.sinceLoop !== false, (v) => updateStep(step.id, { sinceLoop: v })));
     }
 
-    body.appendChild(
-      fieldRow('Timeout', numberInput(step.timeout == null ? 20000 : step.timeout, (v) => updateStep(step.id, { timeout: v })))
+    const changeTimeout = fieldRow(
+      'Timeout',
+      numberInput(step.timeout == null ? 20000 : step.timeout, (v) => updateStep(step.id, { timeout: v }))
     );
+    changeTimeout.appendChild(hintSpan('0 = forever'));
+    body.appendChild(changeTimeout);
     body.appendChild(
       fieldRow('Every', numberInput(step.interval == null ? 300 : step.interval, (v) => updateStep(step.id, { interval: v })))
     );
@@ -899,9 +902,12 @@ function buildStepRow(step, idx, total, path) {
   } else if (step.action === 'scan') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
-    body.appendChild(
-      fieldRow('Timeout', numberInput(step.timeout == null ? 10000 : step.timeout, (v) => updateStep(step.id, { timeout: v })))
+    const scanTimeout = fieldRow(
+      'Timeout',
+      numberInput(step.timeout == null ? 10000 : step.timeout, (v) => updateStep(step.id, { timeout: v }))
     );
+    scanTimeout.appendChild(hintSpan('0 = forever'));
+    body.appendChild(scanTimeout);
     body.appendChild(
       fieldRow('Every', numberInput(step.interval == null ? 250 : step.interval, (v) => updateStep(step.id, { interval: v })))
     );
@@ -1125,6 +1131,13 @@ function toolBtn(text, title, onClick, disabled) {
   btn.disabled = !!disabled;
   btn.addEventListener('click', onClick);
   return btn;
+}
+
+function hintSpan(text) {
+  const span = document.createElement('span');
+  span.className = 'field-label';
+  span.textContent = text;
+  return span;
 }
 
 function fieldRow(labelText, input) {
