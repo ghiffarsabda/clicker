@@ -37,7 +37,7 @@ const BROWSER_URL_COMMANDS = ['newTab', 'newWindow'];
 const BROWSER_ACTIVATE_COMMANDS = ['newTab', 'duplicateTab', 'reopenTab'];
 
 /** Which panels start collapsed — the settings sit at the bottom and stay out of the way. */
-const DEFAULT_COLLAPSED = { add: false, auto: true, loop: true, tabs: true, log: false };
+const DEFAULT_COLLAPSED = { add: false, toolbar: true, auto: true, loop: true, tabs: true, log: false };
 
 const state = {
   macros: [],
@@ -447,6 +447,7 @@ function updateSummaries() {
   set('sum-auto', macro.auto ? `on · ${(macro.urlPattern || '').trim() || 'any page'}` : 'off');
   set('sum-loop', macro.loop ? `on · ${Number(macro.loopCount) > 0 ? macro.loopCount + '\u00d7' : 'until Stop'}` : 'off');
   set('sum-tabs', macro.followTabs !== false ? 'on' : 'off');
+  set('sum-toolbar', `auto ${macro.auto ? 'on' : 'off'} · loop ${macro.loop ? 'on' : 'off'} · tabs ${macro.followTabs !== false ? 'on' : 'off'}`);
   set('sum-add', macro.steps.length ? `${macro.steps.length} step${macro.steps.length === 1 ? '' : 's'}` : '');
 
   const logEl = document.getElementById('sum-log');

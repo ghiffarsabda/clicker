@@ -176,6 +176,20 @@ body {
   display: flex;
 }
 
+/* Panels nested inside another panel (the Toolbar's three settings) */
+.panel-sub {
+  background: var(--panel-2);
+  border-color: transparent;
+}
+
+.panel-sub > .panel-head {
+  padding: 7px 8px;
+}
+
+#panel-toolbar .panel-body {
+  gap: 6px;
+}
+
 .auto-row {
   display: flex;
   align-items: center;
