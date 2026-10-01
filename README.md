@@ -18,7 +18,8 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Wait (ms)`,
-  `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`.
+  `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`,
+  `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -113,6 +114,26 @@ Two things to know when a tab doesn't move the run:
   blocked)"*.
 - The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
   step actually ran on.
+
+## Browser commands
+
+The **Browser** step performs browser-wide shortcuts. They are done with the real APIs rather than
+synthetic key events, because Chrome ignores untrusted events for its own shortcuts:
+
+| Command | Shortcut |
+|---|---|
+| New tab | `Ctrl+T` (optional URL + activate) |
+| Close tab | `Ctrl+W` |
+| Reopen closed tab | `Ctrl+Shift+T` |
+| Next tab / Previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| Duplicate tab | — |
+| Reload / Hard reload | `Ctrl+R` / `Ctrl+Shift+R` |
+| Back / Forward | `Alt+Left` / `Alt+Right` |
+| New window / Close window | `Ctrl+N` / `Ctrl+Shift+W` |
+
+Tab-creating and tab-moving commands move the run with them, so a following step acts on the new
+tab (or the surviving one after a close). Closing the last tab or window stops the macro with a
+clear error rather than failing silently.
 
 ## Keyboard shortcuts
 

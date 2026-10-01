@@ -178,6 +178,7 @@ async function runMacro(macroId, opts = {}) {
           index: i,
           total: macro.steps.length,
           action: step.action,
+          command: step.action === 'browser' ? step.command : undefined,
           url: activeRun.tabUrl,
           iteration: looping ? iteration : null,
           iterations: totalLabel
@@ -253,6 +254,11 @@ async function runStep(step) {
     if (step.activate !== false) await chrome.tabs.update(target.id, { active: true }).catch(() => {});
     adoptTab(target.id);
     await ensureAgent(target.id);
+    return;
+  }
+
+  if (step.action === 'browser') {
+    await runBrowserCommand(step);
     return;
   }
 
@@ -372,13 +378,15 @@ chrome.tabs.onCreated.addListener((tab) => {
   if (recentTabs.length > 40) recentTabs.splice(0, recentTabs.length - 40);
 });
 
+/** Mark a tab as already used so auto-follow never adopts it. */
+function markConsumed(tabId) {
+  const entry = recentTabs.find((t) => t.id === tabId);
+  if (entry) entry.consumed = true;
+}
+
 /** Point the run at a different tab and tell the panel about it. */
 function adoptTab(tabId) {
-  if (tabId != null) {
-    // A tab we deliberately adopted must never be auto-followed again.
-    const entry = recentTabs.find((t) => t.id === tabId);
-    if (entry) entry.consumed = true;
-  }
+  if (tabId != null) markConsumed(tabId);
   if (!activeRun || activeRun.tabId === tabId) return;
   activeRun.tabId = tabId;
   activeRun.history.push(tabId);
@@ -386,6 +394,7 @@ function adoptTab(tabId) {
   chrome.tabs
     .get(tabId)
     .then((t) => {
+      activeRun.windowId = t.windowId; // the new tab may live in another window
       activeRun.tabUrl = t.url || activeRun.tabUrl;
       emit({ type: 'TAB_CHANGED', tabId, url: t.url, title: t.title });
     })
@@ -462,6 +471,126 @@ async function resolveSwitchTarget(step) {
     return others.filter((t) => urlMatches(step.url || '', t.url || ''))[0] || null;
   }
   return others.slice().sort((a, b) => (b.id || 0) - (a.id || 0))[0] || null; // newest
+}
+
+/* ---------------------------------------------------------------- *
+ *  Browser-wide commands (Ctrl+T, Ctrl+W, …)                       *
+ * ---------------------------------------------------------------- */
+
+/**
+ * Browser shortcuts can't be faked from a page — Chrome ignores synthetic key
+ * events for its own shortcuts. So each one is performed with the real API.
+ */
+async function runBrowserCommand(step) {
+  const tabId = activeRun.tabId;
+  const command = step.command || 'newTab';
+  const activate = step.activate !== false;
+  const url = step.url && step.url.trim() ? step.url.trim() : undefined;
+
+  switch (command) {
+    case 'newTab': {
+      const created = await chrome.tabs.create({ url, active: activate });
+      markConsumed(created.id);
+      if (activate) {
+        adoptTab(created.id);
+        await ensureAgent(created.id).catch(() => {});
+      }
+      return;
+    }
+
+    case 'closeTab': {
+      const windowId = activeRun.windowId;
+      await chrome.tabs.remove(tabId).catch(() => {});
+      await sleep(200);
+      const [next] = await chrome.tabs.query({ active: true, windowId });
+      if (!next) throw new Error('Closed the last tab — nothing left to run on');
+      adoptTab(next.id);
+      await ensureAgent(next.id).catch(() => {});
+      return;
+    }
+
+    case 'reopenTab': {
+      const session = await chrome.sessions.restore().catch(() => null);
+      const restored = session && session.tab;
+      if (restored) {
+        markConsumed(restored.id);
+        adoptTab(restored.id);
+        await ensureAgent(restored.id).catch(() => {});
+      }
+      return;
+    }
+
+    case 'nextTab':
+    case 'prevTab': {
+      const tabs = await chrome.tabs.query({ windowId: activeRun.windowId });
+      if (tabs.length < 2) return;
+      const idx = tabs.findIndex((t) => t.id === tabId);
+      const target = tabs[(idx + (command === 'nextTab' ? 1 : -1) + tabs.length) % tabs.length];
+      await chrome.tabs.update(target.id, { active: true }).catch(() => {});
+      adoptTab(target.id);
+      await ensureAgent(target.id).catch(() => {});
+      return;
+    }
+
+    case 'duplicateTab': {
+      const dup = await chrome.tabs.duplicate(tabId).catch(() => null);
+      if (!dup) return;
+      markConsumed(dup.id);
+      if (activate) {
+        adoptTab(dup.id);
+        await ensureAgent(dup.id).catch(() => {});
+      }
+      return;
+    }
+
+    case 'reload':
+    case 'hardReload': {
+      const before = await chrome.tabs
+        .get(tabId)
+        .then((t) => t.url || '')
+        .catch(() => '');
+      await chrome.tabs.reload(tabId, { bypassCache: command === 'hardReload' }).catch(() => {});
+      await sleep(400);
+      await waitForTabComplete(tabId, '').catch(() => {});
+      await ensureAgent(tabId).catch(() => {});
+      activeRun.tabUrl = before || activeRun.tabUrl;
+      return;
+    }
+
+    case 'back':
+    case 'forward': {
+      const go = command === 'back' ? chrome.tabs.goBack : chrome.tabs.goForward;
+      await go(tabId).catch(() => {}); // no history => harmless no-op
+      await sleep(400);
+      await waitForTabComplete(tabId, '').catch(() => {});
+      await ensureAgent(tabId).catch(() => {});
+      return;
+    }
+
+    case 'newWindow': {
+      const win = await chrome.windows.create({ url }).catch(() => null);
+      if (!win) return;
+      const tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
+      if (!tab) return;
+      markConsumed(tab.id);
+      adoptTab(tab.id);
+      await ensureAgent(tab.id).catch(() => {});
+      return;
+    }
+
+    case 'closeWindow': {
+      await chrome.windows.remove(activeRun.windowId).catch(() => {});
+      await sleep(250);
+      const [next] = await chrome.tabs.query({ active: true });
+      if (!next) throw new Error('Closed the last window — nothing left to run on');
+      adoptTab(next.id);
+      await ensureAgent(next.id).catch(() => {});
+      return;
+    }
+
+    default:
+      throw new Error('Unknown browser command: ' + command);
+  }
 }
 
 /* ---------------------------------------------------------------- *

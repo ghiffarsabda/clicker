@@ -12,8 +12,28 @@ const ACTIONS = {
   scroll: { label: 'Scroll', pick: false },
   navigate: { label: 'Go to URL', pick: false },
   openTab: { label: 'Open tab', pick: false },
-  switchTab: { label: 'Switch tab', pick: false }
+  switchTab: { label: 'Switch tab', pick: false },
+  browser: { label: 'Browser', pick: false }
 };
+
+/** Browser-wide shortcuts, performed with the real APIs (synthetic keys are ignored by Chrome). */
+const BROWSER_COMMANDS = [
+  ['newTab', 'New tab (Ctrl+T)'],
+  ['closeTab', 'Close tab (Ctrl+W)'],
+  ['reopenTab', 'Reopen closed tab (Ctrl+Shift+T)'],
+  ['nextTab', 'Next tab (Ctrl+Tab)'],
+  ['prevTab', 'Previous tab (Ctrl+Shift+Tab)'],
+  ['duplicateTab', 'Duplicate tab'],
+  ['reload', 'Reload (Ctrl+R)'],
+  ['hardReload', 'Hard reload (Ctrl+Shift+R)'],
+  ['back', 'Back (Alt+Left)'],
+  ['forward', 'Forward (Alt+Right)'],
+  ['newWindow', 'New window (Ctrl+N)'],
+  ['closeWindow', 'Close window (Ctrl+Shift+W)']
+];
+const BROWSER_LABELS = Object.fromEntries(BROWSER_COMMANDS);
+const BROWSER_URL_COMMANDS = ['newTab', 'newWindow'];
+const BROWSER_ACTIVATE_COMMANDS = ['newTab', 'duplicateTab', 'reopenTab'];
 
 const state = {
   macros: [],
@@ -274,6 +294,8 @@ function onAddStep(action) {
     renderSteps();
     const urlInput = ui.steps.querySelector('.step:last-child .step-input');
     if (urlInput) urlInput.focus();
+  } else if (action === 'browser') {
+    addStep({ action: 'browser', command: 'newTab', url: '', activate: true });
   } else if (action === 'switchTab') {
     addStep({ action: 'switchTab', mode: 'newest', url: '', activate: true });
   } else if (action === 'navigate') {
@@ -350,7 +372,8 @@ function onRuntimeMessage(msg) {
   } else if (msg.type === 'RUN_PROGRESS') {
     const tag = msg.iteration ? `[${msg.iteration}${msg.iterations ? '/' + msg.iterations : ''}] ` : '';
     const where = msg.url ? ` · ${hostOf(msg.url)}` : '';
-    log(`${tag}Step ${msg.index + 1}/${msg.total} — ${ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action}${where}`);
+    const label = msg.action === 'browser' && msg.command ? BROWSER_LABELS[msg.command] : ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action;
+    log(`${tag}Step ${msg.index + 1}/${msg.total} — ${label}${where}`);
 
   } else if (msg.type === 'RUN_STATUS') {
     if (msg.state === 'running') {
@@ -520,6 +543,24 @@ function buildStepRow(step, idx, total) {
   } else if (step.action === 'openTab') {
     body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
+  } else if (step.action === 'browser') {
+    const command = step.command || 'newTab';
+    body.appendChild(
+      fieldRow(
+        'Cmd',
+        selectInput(BROWSER_COMMANDS, command, (v) => {
+          updateStep(step.id, { command: v });
+          persist();
+          renderSteps();
+        })
+      )
+    );
+    if (BROWSER_URL_COMMANDS.includes(command)) {
+      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    }
+    if (BROWSER_ACTIVATE_COMMANDS.includes(command)) {
+      body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
+    }
   } else if (step.action === 'switchTab') {
     body.appendChild(
       fieldRow(
