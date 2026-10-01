@@ -365,7 +365,7 @@ function bindEvents() {
   ui.autoDelay.addEventListener('input', () => {
     const macro = currentMacro();
     if (!macro) return;
-    macro.autoDelay = Number(ui.autoDelay.value) || 0;
+    macro.autoDelay = secToMs(ui.autoDelay.value);
     schedulePersist();
   });
 
@@ -394,7 +394,7 @@ function bindEvents() {
   ui.loopInterval.addEventListener('input', () => {
     const macro = currentMacro();
     if (!macro) return;
-    macro.loopInterval = Number(ui.loopInterval.value) || 0;
+    macro.loopInterval = secToMs(ui.loopInterval.value);
     schedulePersist();
   });
 
@@ -628,7 +628,7 @@ function renderLoop() {
   if (!macro) return;
   ui.loopToggle.checked = !!macro.loop;
   ui.loopCount.value = String(macro.loopCount == null ? 0 : macro.loopCount);
-  ui.loopInterval.value = String(macro.loopInterval == null ? 1000 : macro.loopInterval);
+  ui.loopInterval.value = msToSec(macro.loopInterval == null ? 1000 : macro.loopInterval);
   ui.loopFields.style.display = macro.loop ? 'flex' : 'none';
 }
 
@@ -643,7 +643,7 @@ function renderAuto() {
   if (!macro) return;
   ui.autoToggle.checked = !!macro.auto;
   ui.autoPattern.value = macro.urlPattern || '';
-  ui.autoDelay.value = String(macro.autoDelay == null ? 500 : macro.autoDelay);
+  ui.autoDelay.value = msToSec(macro.autoDelay == null ? 500 : macro.autoDelay);
   ui.autoFields.style.display = macro.auto ? 'flex' : 'none';
 }
 
@@ -885,32 +885,41 @@ function buildStepRow(step, idx, total, path) {
 
     const changeTimeout = fieldRow(
       'Timeout',
-      numberInput(step.timeout == null ? 20000 : step.timeout, (v) => updateStep(step.id, { timeout: v }))
+      secondsInput(step.timeout == null ? 20000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
     );
-    changeTimeout.appendChild(hintSpan('0 = forever'));
+    changeTimeout.appendChild(hintSpan('s · 0 = forever'));
     body.appendChild(changeTimeout);
-    body.appendChild(
-      fieldRow('Every', numberInput(step.interval == null ? 300 : step.interval, (v) => updateStep(step.id, { interval: v })))
+    const changeEvery = fieldRow(
+      'Every',
+      secondsInput(step.interval == null ? 300 : step.interval, (ms) => updateStep(step.id, { interval: ms }))
     );
+    changeEvery.appendChild(hintSpan('s'));
+    body.appendChild(changeEvery);
     body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
   } else if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
-    body.appendChild(
-      fieldRow('Scan ms', numberInput(step.scanMs || 0, (v) => updateStep(step.id, { scanMs: v })))
+    const scanMsRow = fieldRow(
+      'Scan',
+      secondsInput(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms }))
     );
+    scanMsRow.appendChild(hintSpan('s'));
+    body.appendChild(scanMsRow);
   } else if (step.action === 'scan') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
     const scanTimeout = fieldRow(
       'Timeout',
-      numberInput(step.timeout == null ? 10000 : step.timeout, (v) => updateStep(step.id, { timeout: v }))
+      secondsInput(step.timeout == null ? 10000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
     );
-    scanTimeout.appendChild(hintSpan('0 = forever'));
+    scanTimeout.appendChild(hintSpan('s · 0 = forever'));
     body.appendChild(scanTimeout);
-    body.appendChild(
-      fieldRow('Every', numberInput(step.interval == null ? 250 : step.interval, (v) => updateStep(step.id, { interval: v })))
+    const scanEvery = fieldRow(
+      'Every',
+      secondsInput(step.interval == null ? 250 : step.interval, (ms) => updateStep(step.id, { interval: ms }))
     );
+    scanEvery.appendChild(hintSpan('s'));
+    body.appendChild(scanEvery);
     body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
   }
 
@@ -940,17 +949,17 @@ function buildStepRow(step, idx, total, path) {
 
     if (mode === 'range') {
       body.appendChild(
-        fieldRow('Min', numberInput(step.min == null ? 500 : step.min, (v) => updateStep(step.id, { min: v })))
+        fieldRow('Min', secondsInput(step.min == null ? 500 : step.min, (ms) => updateStep(step.id, { min: ms })))
       );
       body.appendChild(
-        fieldRow('Max', numberInput(step.max == null ? 1500 : step.max, (v) => updateStep(step.id, { max: v })))
+        fieldRow('Max', secondsInput(step.max == null ? 1500 : step.max, (ms) => updateStep(step.id, { max: ms })))
       );
-      const hint = hintSpan('random between Min and Max');
+      const hint = hintSpan('s · random between Min and Max');
       hint.style.textTransform = 'none';
       body.appendChild(hint);
     } else {
       body.appendChild(
-        fieldRow('ms', numberInput(step.ms || 0, (v) => updateStep(step.id, { ms: v })))
+        fieldRow('Sec', secondsInput(step.ms || 0, (ms) => updateStep(step.id, { ms })))
       );
     }
   } else if (step.action === 'scroll') {
@@ -991,9 +1000,12 @@ function buildStepRow(step, idx, total, path) {
       body.appendChild(fieldRow('Px', numberInput(step.amount == null ? 600 : step.amount, (v) => updateStep(step.id, { amount: v }))));
     }
 
-    body.appendChild(
-      fieldRow('Time', numberInput(step.duration == null ? 0 : step.duration, (v) => updateStep(step.id, { duration: v })))
+    const scrollTime = fieldRow(
+      'Time',
+      secondsInput(step.duration == null ? 0 : step.duration, (ms) => updateStep(step.id, { duration: ms }))
     );
+    scrollTime.appendChild(hintSpan('s'));
+    body.appendChild(scrollTime);
     if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
     body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
@@ -1169,6 +1181,29 @@ function hintSpan(text) {
   span.className = 'field-label';
   span.textContent = text;
   return span;
+}
+
+/* Times are stored in milliseconds but shown/edited in seconds. */
+function msToSec(value) {
+  const seconds = (Number(value) || 0) / 1000;
+  return String(Math.round(seconds * 1000) / 1000);
+}
+
+function secToMs(value) {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0;
+}
+
+/** A duration input in seconds; onChange receives milliseconds. */
+function secondsInput(valueMs, onChangeMs) {
+  const input = document.createElement('input');
+  input.className = 'step-input';
+  input.type = 'number';
+  input.min = '0';
+  input.step = '0.1';
+  input.value = msToSec(valueMs);
+  input.addEventListener('input', () => onChangeMs(secToMs(input.value)));
+  return input;
 }
 
 function fieldRow(labelText, input) {

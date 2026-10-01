@@ -82,10 +82,15 @@ function waitDuration(step) {
   return Math.max(0, Number(step.ms) || 0);
 }
 
+/** Format a duration (ms) for humans, in seconds. */
+function secs(ms) {
+  return `${Math.round(((Number(ms) || 0) / 1000) * 1000) / 1000}s`;
+}
+
 function rangeLabel(step) {
   const a = Math.max(0, Number(step.min) || 0);
   const b = Math.max(0, Number(step.max) || 0);
-  return `${Math.min(a, b)}\u2013${Math.max(a, b)} ms`;
+  return `${secs(Math.min(a, b))}\u2013${secs(Math.max(a, b))}`;
 }
 
 function isRestricted(tab) {
@@ -324,7 +329,7 @@ async function runStep(step, depth) {
 
   if (step.action === 'wait') {
     const ms = waitDuration(step);
-    if (step.mode === 'range') emit({ type: 'NOTE', text: `Waited ${Math.round(ms)} ms (random ${rangeLabel(step)})` });
+    if (step.mode === 'range') emit({ type: 'NOTE', text: `Waited ${secs(ms)} (random ${rangeLabel(step)})` });
     await cancellableSleep(ms); // Stop works during a (possibly long) wait
     return;
   }
@@ -745,7 +750,7 @@ async function runWaitChange(step, tabId) {
     const left = timeout - (Date.now() - started);
     if (left <= 0) {
       if (step.optional) return;
-      throw new Error(watchUrl ? `URL did not change within ${timeout}ms` : `Text did not change within ${timeout}ms`);
+      throw new Error(watchUrl ? `URL did not change within ${secs(timeout)}` : `Text did not change within ${secs(timeout)}`);
     }
     await sleep(Math.min(every, Math.max(1, left)));
   }

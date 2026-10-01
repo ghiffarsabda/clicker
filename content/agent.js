@@ -858,9 +858,10 @@
       const timeout = timeoutValue(step.timeout, 10000);
       const el = await waitForTarget(step.target, timeout, step.interval, { textMatch: !!step.textMatch });
       if (!el && !step.optional) {
+        const seconds = Math.round((timeout / 1000) * 1000) / 1000;
         throw new Error(
           timeout > 0
-            ? `Scanned for ${timeout}ms but never found: ${describeTarget(step.target)}`
+            ? `Scanned for ${seconds}s but never found: ${describeTarget(step.target)}`
             : `Stopped before the element appeared: ${describeTarget(step.target)}`
         );
       }
