@@ -17,9 +17,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
   matching as long as the element is there. Text matching is opt-in per step (`also match by
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
-- **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Wait (ms)`,
-  `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`,
-  `Browser` (browser-wide shortcuts).
+- **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Scan`
+  (wait for an element), `Wait (ms)`, `Scroll` (human-like), `Go to URL` (navigates in place),
+  `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -114,6 +114,20 @@ Two things to know when a tab doesn't move the run:
   blocked)"*.
 - The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
   step actually ran on.
+
+## Elements that come and go (whack-a-mole)
+
+Some buttons aren't on the page when the macro arrives. Two ways to wait for them — both check
+immediately, then keep re-checking:
+
+- **Scan step** — poll for a picked element until it appears. `Timeout` (ms, default 10000) and
+  `Every` (poll interval, default 250). It errors if the element never shows up, unless
+  **optional** is ticked, in which case the run continues (handy inside a loop that keeps hunting).
+- **`Scan ms`** on a `Click` / `Type` / `Key` step — that step retries *its own* element for the
+  given time before failing. `0` (the default) keeps the old fail-fast behaviour.
+
+Pair a Scan with a loop for a recurring hunt: `Scan(optional) → Click → Wait` around the whole
+thing, looping until you press Stop.
 
 ## Browser commands
 

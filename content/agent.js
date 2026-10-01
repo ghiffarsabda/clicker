@@ -664,11 +664,43 @@
     return best ? containerScroller(best) : win;
   }
 
+  /**
+   * Scan for a target until it shows up — for elements that come and go
+   * (whack-a-mole buttons) rather than being on the page from the first try.
+   * The first check is immediate; returns null if it never appears in time.
+   */
+  async function waitForTarget(target, timeoutMs, intervalMs, opts) {
+    const deadline = performance.now() + Math.max(0, Number(timeoutMs) || 0);
+    const every = Math.max(50, Number(intervalMs) || 250);
+
+    for (;;) {
+      if (window.__CLICKER_CANCEL__) return null;
+      const el = resolveTarget(target, opts);
+      if (el) return el;
+
+      const left = deadline - performance.now();
+      if (left <= 0) return null;
+      await sleep(Math.min(every, left));
+    }
+  }
+
+  /** Find a target, optionally scanning for it first when the step asks for it. */
+  async function locate(step) {
+    const opts = { textMatch: !!step.textMatch };
+    const scanMs = Math.max(0, Number(step.scanMs) || 0);
+    if (scanMs <= 0) return resolveTarget(step.target, opts);
+    return waitForTarget(step.target, scanMs, step.scanInterval, opts);
+  }
+
+  function describeTarget(target) {
+    return (target && target.selector) || 'unknown';
+  }
+
   async function runScrollStep(step) {
     const duration = Math.max(0, Number(step.duration) || 0);
     if (step.target) {
-      const el = resolveTarget(step.target, { textMatch: !!step.textMatch });
-      if (!el) throw new Error('Element not found: ' + ((step.target && step.target.selector) || 'unknown'));
+      const el = await locate(step);
+      if (!el) throw new Error('Element not found: ' + describeTarget(step.target));
       await scrollToElement(el, duration);
       return;
     }
@@ -702,8 +734,17 @@
       return { ok: true };
     }
 
-    const el = resolveTarget(step.target, { textMatch: !!step.textMatch });
-    if (!el) throw new Error('Element not found: ' + ((step.target && step.target.selector) || 'unknown'));
+    if (step.action === 'scan') {
+      const timeout = Math.max(0, Number(step.timeout) || 10000);
+      const el = await waitForTarget(step.target, timeout, step.interval, { textMatch: !!step.textMatch });
+      if (!el && !step.optional) {
+        throw new Error(`Scanned for ${timeout}ms but never found: ${describeTarget(step.target)}`);
+      }
+      return { ok: true, found: !!el };
+    }
+
+    const el = await locate(step);
+    if (!el) throw new Error('Element not found: ' + describeTarget(step.target));
 
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     await sleep(60);

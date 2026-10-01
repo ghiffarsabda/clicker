@@ -8,6 +8,7 @@ const ACTIONS = {
   click: { label: 'Click', pick: true },
   type: { label: 'Type', pick: true },
   press: { label: 'Key press', pick: true },
+  scan: { label: 'Scan', pick: true },
   wait: { label: 'Wait', pick: false },
   scroll: { label: 'Scroll', pick: false },
   navigate: { label: 'Go to URL', pick: false },
@@ -345,6 +346,11 @@ function onRuntimeMessage(msg) {
       const base = { action, target: msg.target };
       if (action === 'type') base.value = '';
       if (action === 'press') base.key = 'Enter';
+      if (action === 'scan') {
+        base.timeout = 10000;
+        base.interval = 250;
+        base.optional = false;
+      }
       addStep(base);
       log(`Added ${ACTIONS[action].label} step → ${msg.target.label}`, 'ok');
     }
@@ -486,6 +492,19 @@ function buildStepRow(step, idx, total) {
   if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
+    body.appendChild(
+      fieldRow('Scan ms', numberInput(step.scanMs || 0, (v) => updateStep(step.id, { scanMs: v })))
+    );
+  } else if (step.action === 'scan') {
+    body.appendChild(buildTargetBlock(step));
+    body.appendChild(matchModeRow(step));
+    body.appendChild(
+      fieldRow('Timeout', numberInput(step.timeout == null ? 10000 : step.timeout, (v) => updateStep(step.id, { timeout: v })))
+    );
+    body.appendChild(
+      fieldRow('Every', numberInput(step.interval == null ? 250 : step.interval, (v) => updateStep(step.id, { interval: v })))
+    );
+    body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
   }
 
   if (step.action === 'type') {
