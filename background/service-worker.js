@@ -65,6 +65,29 @@ function timeoutValue(raw, fallback) {
   return Math.max(0, Number(raw) || 0);
 }
 
+/**
+ * How long a Wait step should actually pause. In "range" mode the duration is
+ * picked at random between min and max (either order — they're sorted), so the
+ * wait isn't a constant, machine-like delay.
+ */
+function waitDuration(step) {
+  if (step.mode === 'range') {
+    const lo0 = Math.max(0, Number(step.min) || 0);
+    const hasMax = step.max !== undefined && step.max !== null && step.max !== '';
+    const hi0 = hasMax ? Math.max(0, Number(step.max) || 0) : lo0;
+    const lo = Math.min(lo0, hi0);
+    const hi = Math.max(lo0, hi0);
+    return lo + Math.random() * (hi - lo);
+  }
+  return Math.max(0, Number(step.ms) || 0);
+}
+
+function rangeLabel(step) {
+  const a = Math.max(0, Number(step.min) || 0);
+  const b = Math.max(0, Number(step.max) || 0);
+  return `${Math.min(a, b)}\u2013${Math.max(a, b)} ms`;
+}
+
 function isRestricted(tab) {
   if (!tab || !tab.url) return true;
   return RESTRICTED.test(tab.url) || RESTRICTED_HOST.test(tab.url);
@@ -300,7 +323,9 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'wait') {
-    await sleep(Math.max(0, Number(step.ms) || 0));
+    const ms = waitDuration(step);
+    if (step.mode === 'range') emit({ type: 'NOTE', text: `Waited ${Math.round(ms)} ms (random ${rangeLabel(step)})` });
+    await cancellableSleep(ms); // Stop works during a (possibly long) wait
     return;
   }
 

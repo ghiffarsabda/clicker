@@ -450,7 +450,7 @@ function onAddStep(action, path) {
     return;
   }
   if (action === 'wait') {
-    addStep({ action: 'wait', ms: 1000 }, branchPath);
+    addStep({ action: 'wait', mode: 'fixed', ms: 1000 }, branchPath);
   } else if (action === 'scroll') {
     addStep({ action: 'scroll', scope: 'amount', direction: 'down', amount: 600, duration: 0 }, branchPath);
   } else if (action === 'openTab') {
@@ -919,9 +919,40 @@ function buildStepRow(step, idx, total, path) {
   } else if (step.action === 'press') {
     body.appendChild(fieldRow('Key', textInput(step.key || 'Enter', (v) => updateStep(step.id, { key: v }))));
   } else if (step.action === 'wait') {
+    const mode = step.mode === 'range' ? 'range' : 'fixed';
     body.appendChild(
-      fieldRow('ms', numberInput(step.ms || 0, (v) => updateStep(step.id, { ms: v })))
+      fieldRow(
+        'Mode',
+        selectInput(
+          [
+            ['fixed', 'Fixed'],
+            ['range', 'Random range']
+          ],
+          mode,
+          (v) => {
+            updateStep(step.id, { mode: v });
+            persist();
+            renderSteps();
+          }
+        )
+      )
     );
+
+    if (mode === 'range') {
+      body.appendChild(
+        fieldRow('Min', numberInput(step.min == null ? 500 : step.min, (v) => updateStep(step.id, { min: v })))
+      );
+      body.appendChild(
+        fieldRow('Max', numberInput(step.max == null ? 1500 : step.max, (v) => updateStep(step.id, { max: v })))
+      );
+      const hint = hintSpan('random between Min and Max');
+      hint.style.textTransform = 'none';
+      body.appendChild(hint);
+    } else {
+      body.appendChild(
+        fieldRow('ms', numberInput(step.ms || 0, (v) => updateStep(step.id, { ms: v })))
+      );
+    }
   } else if (step.action === 'scroll') {
     body.appendChild(buildScrollTarget(step));
     body.appendChild(

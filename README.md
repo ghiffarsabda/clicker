@@ -18,8 +18,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Scan`
-  (wait for an element), `If` (branches), `Wait for change`, `Wait (ms)`, `Scroll` (human-like),
-  `Go to URL` (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
+  (wait for an element), `If` (branches), `Wait for change`, `Wait` (fixed or random range),
+  `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`,
+  `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -119,6 +120,18 @@ Two things to know when a tab doesn't move the run:
   blocked)"*.
 - The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
   step actually ran on.
+
+## Wait step
+
+The **Wait** step pauses the macro, in one of two modes:
+
+- **Fixed** — pause exactly `ms`.
+- **Random range** — pause a random time between `Min` and `Max` (uniform), so the timing isn't a
+  constant, machine-like delay. The chosen value is written to the activity log
+  (`Waited 812 ms (random 500–1500 ms)`).
+
+Either order works for Min/Max (they're sorted); Min alone is a fixed pause, Max alone spans
+`0…Max`. A long wait can be interrupted with **Stop**.
 
 ## Waiting for the page to change
 
