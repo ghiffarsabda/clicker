@@ -105,12 +105,75 @@ body {
   border-color: #3a4150;
 }
 
-/* Auto mode ---------------------------------------------------- */
-.auto-card {
+/* Collapsible panels ------------------------------------------- */
+.panel {
+  flex: 0 0 auto;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 9px 10px;
+  overflow: hidden;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.panel-head:hover {
+  background: var(--panel-2);
+}
+
+.panel-title {
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.panel-summary {
+  flex: 1;
+  min-width: 0;
+  padding-right: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chev {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.panel.open .chev {
+  transform: rotate(180deg);
+}
+
+.panel-body {
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.panel.open .panel-body {
+  display: flex;
 }
 
 .auto-row {
@@ -144,21 +207,7 @@ body {
   margin-top: 8px;
 }
 
-/* Add bar ------------------------------------------------------ */
-.add-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.add-label,
-.log-head {
-  color: var(--muted);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-}
-
+/* Add step ----------------------------------------------------- */
 .add-buttons {
   display: flex;
   gap: 6px;
@@ -426,6 +475,10 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
 }
 
 .link-btn {

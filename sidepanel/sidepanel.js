@@ -36,13 +36,17 @@ const BROWSER_LABELS = Object.fromEntries(BROWSER_COMMANDS);
 const BROWSER_URL_COMMANDS = ['newTab', 'newWindow'];
 const BROWSER_ACTIVATE_COMMANDS = ['newTab', 'duplicateTab', 'reopenTab'];
 
+/** Which panels start collapsed — the settings sit at the bottom and stay out of the way. */
+const DEFAULT_COLLAPSED = { add: false, auto: true, loop: true, tabs: true, log: false };
+
 const state = {
   macros: [],
   selectedId: null,
   running: false,
   armed: false,
   replaceStepId: null,
-  logs: []
+  logs: [],
+  collapsed: Object.assign({}, DEFAULT_COLLAPSED)
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -72,9 +76,10 @@ async function init() {
 
   bindEvents();
 
-  const stored = await chrome.storage.local.get(['macros', 'selectedMacroId']);
+  const stored = await chrome.storage.local.get(['macros', 'selectedMacroId', 'ui_collapsed']);
   state.macros = Array.isArray(stored.macros) ? stored.macros : [];
   state.selectedId = stored.selectedMacroId || null;
+  state.collapsed = Object.assign({}, DEFAULT_COLLAPSED, stored.ui_collapsed || {});
 
   if (state.macros.length === 0) {
     const macro = makeMacro('My first macro');
@@ -88,6 +93,7 @@ async function init() {
   }
 
   render();
+  applyPanels();
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
   log('Ready. Pick an element to start building.', 'dim');
 }
@@ -124,6 +130,7 @@ function addStep(step) {
   persist();
   renderSteps();
   renderMacroSelect();
+  updateSummaries();
 }
 
 function updateStep(stepId, patch) {
@@ -142,6 +149,7 @@ function removeStep(stepId) {
   persist();
   renderSteps();
   renderMacroSelect();
+  updateSummaries();
 }
 
 function moveStep(stepId, dir) {
@@ -160,6 +168,11 @@ function moveStep(stepId, dir) {
  * ---------------------------------------------------------------- */
 
 function bindEvents() {
+  document.querySelectorAll('.panel').forEach((panel) => {
+    const head = panel.querySelector('.panel-head');
+    if (head) head.addEventListener('click', () => togglePanel(panel.dataset.panel));
+  });
+
   ui.macroSelect.addEventListener('change', async () => {
     state.selectedId = ui.macroSelect.value;
     await persist();
@@ -407,6 +420,37 @@ function render() {
   renderTabs();
   renderSteps();
   renderStatus();
+  updateSummaries();
+}
+
+function applyPanels() {
+  document.querySelectorAll('.panel').forEach((panel) => {
+    panel.classList.toggle('open', !state.collapsed[panel.dataset.panel]);
+  });
+}
+
+function togglePanel(key) {
+  if (!key) return;
+  state.collapsed[key] = !state.collapsed[key];
+  applyPanels();
+  chrome.storage.local.set({ ui_collapsed: state.collapsed });
+}
+
+function updateSummaries() {
+  const macro = currentMacro();
+  const set = (id, text) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  if (!macro) return;
+
+  set('sum-auto', macro.auto ? `on · ${(macro.urlPattern || '').trim() || 'any page'}` : 'off');
+  set('sum-loop', macro.loop ? `on · ${Number(macro.loopCount) > 0 ? macro.loopCount + '\u00d7' : 'until Stop'}` : 'off');
+  set('sum-tabs', macro.followTabs !== false ? 'on' : 'off');
+  set('sum-add', macro.steps.length ? `${macro.steps.length} step${macro.steps.length === 1 ? '' : 's'}` : '');
+
+  const logEl = document.getElementById('sum-log');
+  if (logEl) logEl.textContent = state.logs.length ? `${state.logs.length} lines` : '';
 }
 
 function renderLoop() {
@@ -822,6 +866,7 @@ function log(text, kind) {
   });
   if (state.logs.length > 300) state.logs.shift();
   renderLog();
+  updateSummaries();
 }
 
 function renderLog() {

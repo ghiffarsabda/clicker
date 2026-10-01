@@ -28,6 +28,10 @@ under the cursor" approach — and turns it into durable selectors that survive 
   finishes loading. No clicking Run.
 - **Loop mode** — repeat a macro `N` times, or endlessly until you press Stop, with a delay
   between passes. Macros with it on show a `↻` in the list.
+- **Collapsible side panel** — `Add step`, `Auto mode`, `Loop mode`, `Follow new tabs` and the
+  `Activity` log each fold away, with a live summary in the header (`on · example.com`,
+  `on · 3×`, `4 steps`). The settings sit below the step list, so the steps always get the room.
+  Your open/closed state is remembered.
 - **Activity log** — per-step progress and errors.
 
 ## Install (unpacked)

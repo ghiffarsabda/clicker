@@ -22,66 +22,25 @@
     <button id="btn-delete" class="icon-btn" title="Delete macro">&#128465;</button>
   </section>
 
-  <section class="auto-card">
-    <label class="auto-row">
-      <input type="checkbox" id="auto-toggle">
-      <span class="auto-title">Auto mode</span>
-      <span class="auto-hint">run when a matching page loads</span>
-    </label>
-    <div class="auto-fields" id="auto-fields">
-      <div class="field-row">
-        <span class="field-label">URL</span>
-        <input type="text" id="auto-pattern" class="step-input" placeholder="https://example.com/*  (blank = any page)" spellcheck="false">
+  <section class="panel" data-panel="add">
+    <button class="panel-head" type="button">
+      <span class="panel-title">Add step</span>
+      <span class="panel-summary" id="sum-add"></span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="panel-body">
+      <div class="add-buttons">
+        <button class="add-btn" data-add="click">Click</button>
+        <button class="add-btn" data-add="type">Type</button>
+        <button class="add-btn" data-add="press">Key</button>
+        <button class="add-btn" data-add="scan">Scan</button>
+        <button class="add-btn" data-add="wait">Wait</button>
+        <button class="add-btn" data-add="scroll">Scroll</button>
+        <button class="add-btn" data-add="navigate">Go to</button>
+        <button class="add-btn" data-add="openTab">New tab</button>
+        <button class="add-btn" data-add="switchTab">Switch</button>
+        <button class="add-btn" data-add="browser">Browser</button>
       </div>
-      <div class="field-row">
-        <span class="field-label">Delay</span>
-        <input type="number" id="auto-delay" class="step-input" min="0" step="100" value="500">
-        <span class="field-label">ms</span>
-      </div>
-    </div>
-  </section>
-
-  <section class="auto-card">
-    <label class="auto-row">
-      <input type="checkbox" id="loop-toggle">
-      <span class="auto-title">Loop mode</span>
-      <span class="auto-hint">repeat the steps</span>
-    </label>
-    <div class="auto-fields" id="loop-fields">
-      <div class="field-row">
-        <span class="field-label">Times</span>
-        <input type="number" id="loop-count" class="step-input" min="0" step="1" value="0">
-        <span class="field-label">0 = until Stop</span>
-      </div>
-      <div class="field-row">
-        <span class="field-label">Every</span>
-        <input type="number" id="loop-interval" class="step-input" min="0" step="100" value="1000">
-        <span class="field-label">ms</span>
-      </div>
-    </div>
-  </section>
-
-  <section class="auto-card">
-    <label class="auto-row">
-      <input type="checkbox" id="follow-toggle">
-      <span class="auto-title">Follow new tabs</span>
-      <span class="auto-hint">continue on tabs a step opens</span>
-    </label>
-  </section>
-
-  <section class="add-bar">
-    <span class="add-label">Add step</span>
-    <div class="add-buttons">
-      <button class="add-btn" data-add="click">Click</button>
-      <button class="add-btn" data-add="type">Type</button>
-      <button class="add-btn" data-add="press">Key</button>
-      <button class="add-btn" data-add="scan">Scan</button>
-      <button class="add-btn" data-add="wait">Wait</button>
-      <button class="add-btn" data-add="scroll">Scroll</button>
-      <button class="add-btn" data-add="navigate">Go to</button>
-      <button class="add-btn" data-add="openTab">New tab</button>
-      <button class="add-btn" data-add="switchTab">Switch</button>
-      <button class="add-btn" data-add="browser">Browser</button>
     </div>
   </section>
 
@@ -99,12 +58,84 @@
     <span id="run-hint" class="run-hint">Alt+Shift+R</span>
   </footer>
 
-  <section class="log-wrap">
-    <div class="log-head">
-      <span>Activity</span>
-      <button id="btn-clear-log" class="link-btn">clear</button>
+  <section class="panel" data-panel="auto">
+    <button class="panel-head" type="button">
+      <span class="panel-title">Auto mode</span>
+      <span class="panel-summary" id="sum-auto">off</span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="panel-body">
+      <label class="auto-row">
+        <input type="checkbox" id="auto-toggle">
+        <span class="auto-hint">run when a matching page loads</span>
+      </label>
+      <div class="auto-fields" id="auto-fields">
+        <div class="field-row">
+          <span class="field-label">URL</span>
+          <input type="text" id="auto-pattern" class="step-input" placeholder="https://example.com/*  (blank = any page)" spellcheck="false">
+        </div>
+        <div class="field-row">
+          <span class="field-label">Delay</span>
+          <input type="number" id="auto-delay" class="step-input" min="0" step="100" value="500">
+          <span class="field-label">ms</span>
+        </div>
+      </div>
     </div>
-    <div id="log" class="log"></div>
+  </section>
+
+  <section class="panel" data-panel="loop">
+    <button class="panel-head" type="button">
+      <span class="panel-title">Loop mode</span>
+      <span class="panel-summary" id="sum-loop">off</span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="panel-body">
+      <label class="auto-row">
+        <input type="checkbox" id="loop-toggle">
+        <span class="auto-hint">repeat the steps</span>
+      </label>
+      <div class="auto-fields" id="loop-fields">
+        <div class="field-row">
+          <span class="field-label">Times</span>
+          <input type="number" id="loop-count" class="step-input" min="0" step="1" value="0">
+          <span class="field-label">0 = until Stop</span>
+        </div>
+        <div class="field-row">
+          <span class="field-label">Every</span>
+          <input type="number" id="loop-interval" class="step-input" min="0" step="100" value="1000">
+          <span class="field-label">ms</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="tabs">
+    <button class="panel-head" type="button">
+      <span class="panel-title">Follow new tabs</span>
+      <span class="panel-summary" id="sum-tabs">on</span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="panel-body">
+      <label class="auto-row">
+        <input type="checkbox" id="follow-toggle">
+        <span class="auto-hint">continue on tabs a step opens</span>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="log">
+    <button class="panel-head" type="button">
+      <span class="panel-title">Activity</span>
+      <span class="panel-summary" id="sum-log"></span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="panel-body">
+      <div class="log-head">
+        <span></span>
+        <button id="btn-clear-log" class="link-btn" type="button">clear</button>
+      </div>
+      <div id="log" class="log"></div>
+    </div>
   </section>
 
   <script src="sidepanel.js"></script>
