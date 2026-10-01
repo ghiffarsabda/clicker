@@ -10,6 +10,7 @@ const ACTIONS = {
   press: { label: 'Key press', pick: true },
   scan: { label: 'Scan', pick: true },
   if: { label: 'If', pick: false },
+  waitChange: { label: 'Wait for change', pick: false },
   wait: { label: 'Wait', pick: false },
   scroll: { label: 'Scroll', pick: false },
   navigate: { label: 'Go to URL', pick: false },
@@ -25,6 +26,7 @@ const ADD_MENU = [
   ['press', 'Key'],
   ['scan', 'Scan'],
   ['if', 'If'],
+  ['waitChange', 'Wait change'],
   ['wait', 'Wait'],
   ['scroll', 'Scroll'],
   ['navigate', 'Go to'],
@@ -37,7 +39,8 @@ const CONDITION_TYPES = [
   ['exists', 'Element'],
   ['text', 'Text'],
   ['attr', 'Attribute'],
-  ['url', 'Page URL']
+  ['url', 'Page URL'],
+  ['urlChanged', 'URL changed']
 ];
 const CONDITION_OPS = [
   ['is', 'is'],
@@ -62,6 +65,7 @@ function conditionSummary(condition) {
   const c = condition || {};
   const neg = c.negate ? 'not ' : '';
   const target = (c.target && (c.target.label || c.target.selector)) || 'element';
+  if (c.type === 'urlChanged') return `${neg}url changed since last loop`;
   if (c.type === 'url') return `${neg}url matches ${c.pattern || '*'}`;
   if (c.type === 'text') return `${neg}${target} text ${c.op || 'contains'} "${c.value || ''}"`;
   if (c.type === 'attr') return `${neg}${target} ${c.attr || 'href'} ${c.op || 'is'} "${c.value || ''}"`;
@@ -441,6 +445,10 @@ function onAddStep(action, path) {
     addStep({ action: 'if', condition: defaultCondition(), then: [], else: [] }, branchPath);
     return;
   }
+  if (action === 'waitChange') {
+    addStep({ action: 'waitChange', watch: 'url', sinceLoop: true, timeout: 20000, interval: 300, optional: false }, branchPath);
+    return;
+  }
   if (action === 'wait') {
     addStep({ action: 'wait', ms: 1000 }, branchPath);
   } else if (action === 'scroll') {
@@ -739,6 +747,11 @@ function buildConditionEditor(step) {
     wrap.appendChild(
       fieldRow('Pattern', textInput(cond.pattern || '', (v) => { cond.pattern = v; schedulePersist(); }))
     );
+  } else if (cond.type === 'urlChanged') {
+    const hint = document.createElement('div');
+    hint.className = 'target-label';
+    hint.textContent = 'True when the URL differs from the previous loop iteration.';
+    wrap.appendChild(hint);
   } else {
     const target = document.createElement('div');
     target.className = 'target';
@@ -843,6 +856,40 @@ function buildStepRow(step, idx, total, path) {
     body.appendChild(buildConditionEditor(step));
     body.appendChild(buildBranch(step, path.concat([idx, 'then']), 'then', 'Then'));
     body.appendChild(buildBranch(step, path.concat([idx, 'else']), 'else', 'Else'));
+  } else if (step.action === 'waitChange') {
+    const watch = step.watch || 'url';
+    body.appendChild(
+      fieldRow(
+        'Watch',
+        selectInput(
+          [
+            ['url', 'Page URL'],
+            ['element', 'Element text']
+          ],
+          watch,
+          (v) => {
+            updateStep(step.id, { watch: v });
+            persist();
+            renderSteps();
+          }
+        )
+      )
+    );
+
+    if (watch === 'element') {
+      body.appendChild(buildTargetBlock(step));
+      body.appendChild(matchModeRow(step));
+    } else {
+      body.appendChild(checkboxRow('since last loop', step.sinceLoop !== false, (v) => updateStep(step.id, { sinceLoop: v })));
+    }
+
+    body.appendChild(
+      fieldRow('Timeout', numberInput(step.timeout == null ? 20000 : step.timeout, (v) => updateStep(step.id, { timeout: v })))
+    );
+    body.appendChild(
+      fieldRow('Every', numberInput(step.interval == null ? 300 : step.interval, (v) => updateStep(step.id, { interval: v })))
+    );
+    body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
   } else if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));

@@ -42,6 +42,14 @@
           sendResponse({ ok: false, error: String((err && err.message) || err) });
         }
         return true;
+      case 'READ_TEXT':
+        try {
+          const el = resolveTarget(msg.target, { textMatch: !!msg.textMatch }) || resolveAny(msg.target, { textMatch: !!msg.textMatch });
+          sendResponse({ ok: true, text: el ? (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ') : null });
+        } catch (err) {
+          sendResponse({ ok: false, error: String((err && err.message) || err) });
+        }
+        return true;
     }
     return true;
   });
@@ -512,7 +520,7 @@
     const end = performance.now() + ms;
     while (performance.now() < end) {
       if (window.__CLICKER_CANCEL__) return;
-      await sleep(Math.min(60, end - performance.now()));
+      await sleep(Math.min(60, Math.max(1, end - performance.now())));
     }
   }
 

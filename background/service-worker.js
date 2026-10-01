@@ -35,7 +35,7 @@ async function cancellableSleep(ms) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     if (!activeRun || activeRun.cancelled) return;
-    await sleep(Math.min(150, end - Date.now()));
+    await sleep(Math.min(150, Math.max(1, end - Date.now())));
   }
 }
 
@@ -46,6 +46,13 @@ function emit(message) {
 async function getActiveTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
+}
+
+async function currentUrl(tabId) {
+  return chrome.tabs
+    .get(tabId)
+    .then((t) => t.url || '')
+    .catch(() => '');
 }
 
 function isRestricted(tab) {
@@ -148,7 +155,8 @@ async function runMacro(macroId, opts = {}) {
     follow: macro.followTabs !== false,
     startedAt: Date.now(),
     stepStartedAt: Date.now(),
-    tabUrl: tab.url || ''
+    tabUrl: tab.url || '',
+    loopMemory: {}
   };
 
   // Loop mode: repeat the whole step list `loopCount` times (0 = until stopped).
@@ -162,6 +170,8 @@ async function runMacro(macroId, opts = {}) {
   try {
     await ensureAgent(tab.id);
 
+    // loopMemory.url is only filled at the END of each iteration, so the first
+    // pass has no "previous loop" to compare against (and proceeds unchanged).
     activeRun.looping = looping;
 
     for (let iteration = 1; iteration <= limit; iteration++) {
@@ -171,6 +181,7 @@ async function runMacro(macroId, opts = {}) {
       activeRun.loopTotal = totalLabel;
 
       await runSteps(macro.steps, 0);
+      activeRun.loopMemory.url = await currentUrl(activeRun.tabId);
 
       if (iteration < limit && interval > 0) await cancellableSleep(interval);
     }
@@ -248,11 +259,11 @@ async function evaluateCondition(condition, tabId) {
 
   let raw;
   if (condition.type === 'url') {
-    const url = await chrome.tabs
-      .get(tabId)
-      .then((t) => t.url || '')
-      .catch(() => '');
-    raw = urlMatches(condition.pattern || '', url);
+    raw = urlMatches(condition.pattern || '', await currentUrl(tabId));
+  } else if (condition.type === 'urlChanged') {
+    // Compares against the URL remembered from the previous loop iteration.
+    const prev = activeRun && activeRun.loopMemory ? activeRun.loopMemory.url : null;
+    raw = prev == null ? true : (await currentUrl(tabId)) !== prev;
   } else {
     let res;
     try {
@@ -311,6 +322,11 @@ async function runStep(step, depth) {
     if (step.activate !== false) await chrome.tabs.update(target.id, { active: true }).catch(() => {});
     adoptTab(target.id);
     await ensureAgent(target.id);
+    return;
+  }
+
+  if (step.action === 'waitChange') {
+    await runWaitChange(step, tabId);
     return;
   }
 
@@ -647,6 +663,50 @@ async function runBrowserCommand(step) {
 
     default:
       throw new Error('Unknown browser command: ' + command);
+  }
+}
+
+/** Read an element's text from the page (for wait-for-change on text). */
+async function readTargetText(tabId, step) {
+  try {
+    const res = await chrome.tabs.sendMessage(tabId, {
+      type: 'READ_TEXT',
+      target: step.target,
+      textMatch: !!step.textMatch
+    });
+    return res && res.ok ? String(res.text == null ? '' : res.text) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * Wait until something changes — the page URL, or a picked element's text.
+ * With `sinceLoop` the baseline is the value from the previous loop iteration,
+ * which is how you say "if it's still the same page as last time, wait".
+ */
+async function runWaitChange(step, tabId) {
+  const timeout = Math.max(0, Number(step.timeout) || 20000);
+  const every = Math.max(100, Number(step.interval) || 300);
+  const watchUrl = (step.watch || 'url') === 'url';
+
+  const read = () => (watchUrl ? currentUrl(tabId) : readTargetText(tabId, step));
+
+  const baseline =
+    watchUrl && step.sinceLoop && activeRun.loopMemory.url ? activeRun.loopMemory.url : await read();
+
+  const started = Date.now();
+  for (;;) {
+    if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
+
+    if ((await read()) !== baseline) return;
+
+    const left = timeout - (Date.now() - started);
+    if (left <= 0) {
+      if (step.optional) return;
+      throw new Error(watchUrl ? `URL did not change within ${timeout}ms` : `Text did not change within ${timeout}ms`);
+    }
+    await sleep(Math.min(every, left));
   }
 }
 

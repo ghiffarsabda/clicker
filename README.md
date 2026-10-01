@@ -18,8 +18,8 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Scan`
-  (wait for an element), `If` (branches), `Wait (ms)`, `Scroll` (human-like), `Go to URL`
-  (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
+  (wait for an element), `If` (branches), `Wait for change`, `Wait (ms)`, `Scroll` (human-like),
+  `Go to URL` (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -119,6 +119,23 @@ Two things to know when a tab doesn't move the run:
   blocked)"*.
 - The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
   step actually ran on.
+
+## Waiting for the page to change
+
+For loops that should not re-run until the page actually moves on:
+
+- **Wait for change** step — polls until something changes, then continues.
+  - `Watch`: **Page URL** or **Element text** (pick an element; its text is compared).
+  - **since last loop** (URL only) — the baseline is the URL remembered from the *previous loop
+    iteration*, so this is exactly *"if the URL is still the same as last time, wait until it
+    changes"*. Unticked, the baseline is the URL when the step starts.
+  - `Timeout` (default 20s), `Every` (poll interval, default 300ms), and `optional` to continue
+    instead of erroring if nothing changes in time.
+- **If → URL changed** condition — true when the URL differs from the previous loop iteration
+  (the first pass counts as changed, so it always proceeds). Use it to guard a whole branch.
+
+Loop memory is per-run and only filled at the **end** of each iteration, so the first pass has
+nothing to compare against.
 
 ## If / Then / Else
 
