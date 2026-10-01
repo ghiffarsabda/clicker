@@ -18,8 +18,8 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Scan`
-  (wait for an element), `Wait (ms)`, `Scroll` (human-like), `Go to URL` (navigates in place),
-  `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
+  (wait for an element), `If` (branches), `Wait (ms)`, `Scroll` (human-like), `Go to URL`
+  (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -119,6 +119,24 @@ Two things to know when a tab doesn't move the run:
   blocked)"*.
 - The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
   step actually ran on.
+
+## If / Then / Else
+
+An **If** step holds a condition and two branches. It runs the **then** steps when the condition
+holds and the **else** steps when it doesn't; either branch can contain any steps, including more
+Ifs (nesting works to any depth). Add steps to a branch with its `+ add step` button.
+
+Conditions:
+
+| Type | Tests |
+|---|---|
+| **Element** | the picked element is `visible` / `present` / `hidden` |
+| **Text** | its text `is` / `contains` / `starts with` / `ends with` / `not empty` / `regex` a value |
+| **Attribute** | an attribute (or `value` for an input) compared the same way |
+| **Page URL** | the tab's URL matches a wildcard pattern (`*/checkout/*`, `example.com`, …) |
+
+Tick **not** to invert any condition, and **case** to make text comparisons case-sensitive.
+The activity log reports which branch was taken, and nested steps are indented.
 
 ## Elements that come and go (whack-a-mole)
 

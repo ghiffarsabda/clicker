@@ -241,6 +241,13 @@ body {
   font-weight: 600;
 }
 
+.add-btn.small {
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 4px 7px;
+  font-size: 11px;
+}
+
 .add-btn:hover {
   border-color: var(--accent);
   color: #fca5a5;
@@ -276,6 +283,82 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* If / then / else branches */
+.branch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
+}
+
+.branch-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.branch-title {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.branch-count {
+  color: #4b5563;
+  font-size: 11px;
+}
+
+.branch-add {
+  margin-left: auto;
+  padding: 2px 7px;
+  background: transparent;
+  color: #93c5fd;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.branch-add:hover {
+  border-color: #93c5fd;
+}
+
+.branch-picker {
+  display: none;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.condition {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: #0b0d11;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.step-sub {
+  max-width: 45%;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .step {

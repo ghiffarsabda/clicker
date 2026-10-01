@@ -9,6 +9,7 @@ const ACTIONS = {
   type: { label: 'Type', pick: true },
   press: { label: 'Key press', pick: true },
   scan: { label: 'Scan', pick: true },
+  if: { label: 'If', pick: false },
   wait: { label: 'Wait', pick: false },
   scroll: { label: 'Scroll', pick: false },
   navigate: { label: 'Go to URL', pick: false },
@@ -16,6 +17,56 @@ const ACTIONS = {
   switchTab: { label: 'Switch tab', pick: false },
   browser: { label: 'Browser', pick: false }
 };
+
+/** Order + short labels for the "add step" menus (the top bar and each If branch). */
+const ADD_MENU = [
+  ['click', 'Click'],
+  ['type', 'Type'],
+  ['press', 'Key'],
+  ['scan', 'Scan'],
+  ['if', 'If'],
+  ['wait', 'Wait'],
+  ['scroll', 'Scroll'],
+  ['navigate', 'Go to'],
+  ['openTab', 'New tab'],
+  ['switchTab', 'Switch'],
+  ['browser', 'Browser']
+];
+
+const CONDITION_TYPES = [
+  ['exists', 'Element'],
+  ['text', 'Text'],
+  ['attr', 'Attribute'],
+  ['url', 'Page URL']
+];
+const CONDITION_OPS = [
+  ['is', 'is'],
+  ['contains', 'contains'],
+  ['starts', 'starts with'],
+  ['ends', 'ends with'],
+  ['notEmpty', 'not empty'],
+  ['regex', 'regex']
+];
+const CONDITION_STATES = [
+  ['visible', 'Visible'],
+  ['present', 'Present'],
+  ['hidden', 'Hidden']
+];
+
+function defaultCondition() {
+  return { type: 'exists', state: 'visible', target: null, negate: false };
+}
+
+/** One-line summary of an If condition (mirrors the worker's log label). */
+function conditionSummary(condition) {
+  const c = condition || {};
+  const neg = c.negate ? 'not ' : '';
+  const target = (c.target && (c.target.label || c.target.selector)) || 'element';
+  if (c.type === 'url') return `${neg}url matches ${c.pattern || '*'}`;
+  if (c.type === 'text') return `${neg}${target} text ${c.op || 'contains'} "${c.value || ''}"`;
+  if (c.type === 'attr') return `${neg}${target} ${c.attr || 'href'} ${c.op || 'is'} "${c.value || ''}"`;
+  return `${neg}${target} is ${c.state || 'visible'}`;
+}
 
 /** Browser-wide shortcuts, performed with the real APIs (synthetic keys are ignored by Chrome). */
 const BROWSER_COMMANDS = [
@@ -44,7 +95,9 @@ const state = {
   selectedId: null,
   running: false,
   armed: false,
-  replaceStepId: null,
+  pickBranch: [],
+  pickStepId: null,
+  pickSlot: 'target',
   logs: [],
   collapsed: Object.assign({}, DEFAULT_COLLAPSED)
 };
@@ -74,6 +127,7 @@ async function init() {
   ui.loopInterval = $('#loop-interval');
   ui.followToggle = $('#follow-toggle');
 
+  fillAddButtons();
   bindEvents();
 
   const stored = await chrome.storage.local.get(['macros', 'selectedMacroId', 'ui_collapsed']);
@@ -114,6 +168,67 @@ function currentMacro() {
   return state.macros.find((m) => m.id === state.selectedId) || null;
 }
 
+/* --- nested step lookup -------------------------------------------------
+ * A branch path is [index, 'then'|'else', index, ...]; [] is the root list.
+ * ---------------------------------------------------------------------- */
+
+function branchOf(path) {
+  const macro = currentMacro();
+  if (!macro) return null;
+  let list = macro.steps;
+  for (let i = 0; i + 1 < path.length; i += 2) {
+    const step = list[path[i]];
+    if (!step) return null;
+    const key = path[i + 1];
+    if (!Array.isArray(step[key])) step[key] = [];
+    list = step[key];
+  }
+  return list;
+}
+
+/** Depth-first search for a step (walks into If branches). */
+function findStep(id, list) {
+  const macro = currentMacro();
+  const steps = list || (macro ? macro.steps : []);
+  for (const step of steps) {
+    if (step.id === id) return step;
+    if (step.action === 'if') {
+      const inThen = findStep(id, step.then || []);
+      if (inThen) return inThen;
+      const inElse = findStep(id, step.else || []);
+      if (inElse) return inElse;
+    }
+  }
+  return null;
+}
+
+/** The list a step lives in, plus its index there (for move/remove). */
+function findLocation(id, list) {
+  const macro = currentMacro();
+  const steps = list || (macro ? macro.steps : []);
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    if (step.id === id) return { list: steps, index: i };
+    if (step.action === 'if') {
+      const inThen = findLocation(id, step.then || []);
+      if (inThen) return inThen;
+      const inElse = findLocation(id, step.else || []);
+      if (inElse) return inElse;
+    }
+  }
+  return null;
+}
+
+/** Total steps including those nested in If branches. */
+function countSteps(list) {
+  let n = 0;
+  for (const step of list || []) {
+    n += 1;
+    if (step.action === 'if') n += countSteps(step.then) + countSteps(step.else);
+  }
+  return n;
+}
+
 function schedulePersist() {
   clearTimeout(persistTimer);
   persistTimer = setTimeout(persist, 400);
@@ -123,29 +238,29 @@ function persist() {
   return chrome.storage.local.set({ macros: state.macros, selectedMacroId: state.selectedId });
 }
 
-function addStep(step) {
-  const macro = currentMacro();
-  if (!macro) return;
-  macro.steps.push(Object.assign({ id: uid() }, step));
+function addStep(step, path) {
+  const list = branchOf(path || []);
+  if (!list) return null;
+  const created = Object.assign({ id: uid() }, step);
+  list.push(created);
   persist();
   renderSteps();
   renderMacroSelect();
   updateSummaries();
+  return created;
 }
 
 function updateStep(stepId, patch) {
-  const macro = currentMacro();
-  if (!macro) return;
-  const step = macro.steps.find((s) => s.id === stepId);
+  const step = findStep(stepId);
   if (!step) return;
   Object.assign(step, patch);
   schedulePersist();
 }
 
 function removeStep(stepId) {
-  const macro = currentMacro();
-  if (!macro) return;
-  macro.steps = macro.steps.filter((s) => s.id !== stepId);
+  const loc = findLocation(stepId);
+  if (!loc) return;
+  loc.list.splice(loc.index, 1);
   persist();
   renderSteps();
   renderMacroSelect();
@@ -153,12 +268,11 @@ function removeStep(stepId) {
 }
 
 function moveStep(stepId, dir) {
-  const macro = currentMacro();
-  if (!macro) return;
-  const idx = macro.steps.findIndex((s) => s.id === stepId);
-  const next = idx + dir;
-  if (idx === -1 || next < 0 || next >= macro.steps.length) return;
-  [macro.steps[idx], macro.steps[next]] = [macro.steps[next], macro.steps[idx]];
+  const loc = findLocation(stepId);
+  if (!loc) return;
+  const next = loc.index + dir;
+  if (next < 0 || next >= loc.list.length) return;
+  [loc.list[loc.index], loc.list[next]] = [loc.list[next], loc.list[loc.index]];
   persist();
   renderSteps();
 }
@@ -213,7 +327,7 @@ function bindEvents() {
   });
 
   document.querySelectorAll('[data-add]').forEach((btn) => {
-    btn.addEventListener('click', () => onAddStep(btn.dataset.add));
+    btn.addEventListener('click', () => onAddStep(btn.dataset.add, []));
   });
 
   ui.runBtn.addEventListener('click', runSelected);
@@ -294,38 +408,66 @@ function bindEvents() {
   });
 }
 
-function onAddStep(action) {
+function fillAddButtons() {
+  const host = document.getElementById('add-buttons');
+  if (!host) return;
+  host.innerHTML = '';
+  ADD_MENU.forEach(([action, label]) => host.appendChild(addButton(action, label)));
+}
+
+function addButton(action, label) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'add-btn small';
+  btn.dataset.add = action;
+  btn.textContent = label;
+  return btn;
+}
+
+function focusStepInput(id) {
+  if (!id) return;
+  const el = document.querySelector(`[data-step-id="${id}"] .step-input`);
+  if (el) el.focus();
+}
+
+function onAddStep(action, path) {
+  const branchPath = path || [];
+
   if (ACTIONS[action] && ACTIONS[action].pick) {
-    startPick(action);
+    startPick(action, { branchPath });
+    return;
+  }
+  if (action === 'if') {
+    addStep({ action: 'if', condition: defaultCondition(), then: [], else: [] }, branchPath);
     return;
   }
   if (action === 'wait') {
-    addStep({ action: 'wait', ms: 1000 });
+    addStep({ action: 'wait', ms: 1000 }, branchPath);
   } else if (action === 'scroll') {
-    addStep({ action: 'scroll', scope: 'amount', direction: 'down', amount: 600, duration: 0 });
+    addStep({ action: 'scroll', scope: 'amount', direction: 'down', amount: 600, duration: 0 }, branchPath);
   } else if (action === 'openTab') {
-    addStep({ action: 'openTab', url: 'https://', activate: true });
-    renderSteps();
-    const urlInput = ui.steps.querySelector('.step:last-child .step-input');
-    if (urlInput) urlInput.focus();
+    const step = addStep({ action: 'openTab', url: 'https://', activate: true }, branchPath);
+    focusStepInput(step && step.id);
   } else if (action === 'browser') {
-    addStep({ action: 'browser', command: 'newTab', url: '', activate: true });
+    addStep({ action: 'browser', command: 'newTab', url: '', activate: true }, branchPath);
   } else if (action === 'switchTab') {
-    addStep({ action: 'switchTab', mode: 'newest', url: '', activate: true });
+    addStep({ action: 'switchTab', mode: 'newest', url: '', activate: true }, branchPath);
   } else if (action === 'navigate') {
-    addStep({ action: 'navigate', url: 'https://' });
-    renderSteps();
-    const input = ui.steps.querySelector('.step:last-child .step-input');
-    if (input) input.focus();
+    const step = addStep({ action: 'navigate', url: 'https://' }, branchPath);
+    focusStepInput(step && step.id);
   }
 }
 
-function startPick(action, replaceStepId = null) {
-  state.replaceStepId = replaceStepId;
+function startPick(action, opts) {
+  const options = opts || {};
+  state.pickBranch = options.branchPath || [];
+  state.pickStepId = options.stepId || null;
+  state.pickSlot = options.slot || 'target';
   state.armed = true;
   renderStatus();
   chrome.runtime.sendMessage({ type: 'ARM_PICKER', mode: action });
-  log(`Picking element to ${ACTIONS[action].label.toLowerCase()}… click it on the page.`, 'dim');
+  const what = state.pickSlot === 'condition' ? 'test' : ACTIONS[action] ? ACTIONS[action].label.toLowerCase() : 'use';
+  log(`Picking element to ${what}… click it on the page.`, 'dim');
 }
 
 function runSelected() {
@@ -348,13 +490,26 @@ function onRuntimeMessage(msg) {
   if (msg.type === 'ELEMENT_PICKED') {
     state.armed = false;
     const action = msg.mode || 'click';
+    const stepId = state.pickStepId;
+    const slot = state.pickSlot;
+    const branchPath = state.pickBranch || [];
+    state.pickStepId = null;
+    state.pickSlot = 'target';
 
-    if (state.replaceStepId) {
-      updateStep(state.replaceStepId, { target: msg.target });
-      log(`Re-picked: ${msg.target.label}`, 'ok');
-      state.replaceStepId = null;
-      persist();
-      renderSteps();
+    if (stepId) {
+      const step = findStep(stepId);
+      if (step) {
+        if (slot === 'condition') {
+          step.condition = Object.assign({}, step.condition || defaultCondition(), { target: msg.target });
+          log(`Condition target: ${msg.target.label}`, 'ok');
+        } else {
+          step.target = msg.target;
+          log(`Re-picked: ${msg.target.label}`, 'ok');
+        }
+        persist();
+        renderSteps();
+        updateSummaries();
+      }
     } else {
       const base = { action, target: msg.target };
       if (action === 'type') base.value = '';
@@ -364,14 +519,15 @@ function onRuntimeMessage(msg) {
         base.interval = 250;
         base.optional = false;
       }
-      addStep(base);
+      addStep(base, branchPath);
       log(`Added ${ACTIONS[action].label} step → ${msg.target.label}`, 'ok');
     }
     renderStatus();
 
   } else if (msg.type === 'PICK_CANCELLED' || (msg.type === 'PICK_STATUS' && msg.state !== 'armed')) {
     state.armed = false;
-    state.replaceStepId = null;
+    state.pickStepId = null;
+    state.pickSlot = 'target';
     renderStatus();
     if (msg.type === 'PICK_STATUS' && msg.error) log(msg.error, 'err');
 
@@ -388,11 +544,15 @@ function onRuntimeMessage(msg) {
   } else if (msg.type === 'RUN_LOOP') {
     log(`Loop ${msg.iteration}${msg.total ? ' of ' + msg.total : ''}`, 'dim');
 
+  } else if (msg.type === 'BRANCH') {
+    log(`${msg.result ? '✓ then' : '✗ else'} — ${msg.label}`, 'dim');
+
   } else if (msg.type === 'RUN_PROGRESS') {
     const tag = msg.iteration ? `[${msg.iteration}${msg.iterations ? '/' + msg.iterations : ''}] ` : '';
     const where = msg.url ? ` · ${hostOf(msg.url)}` : '';
+    const indent = msg.depth ? '    '.repeat(msg.depth) : '';
     const label = msg.action === 'browser' && msg.command ? BROWSER_LABELS[msg.command] : ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action;
-    log(`${tag}Step ${msg.index + 1}/${msg.total} — ${label}${where}`);
+    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${where}`);
 
   } else if (msg.type === 'RUN_STATUS') {
     if (msg.state === 'running') {
@@ -448,7 +608,8 @@ function updateSummaries() {
   set('sum-loop', macro.loop ? `on · ${Number(macro.loopCount) > 0 ? macro.loopCount + '\u00d7' : 'until Stop'}` : 'off');
   set('sum-tabs', macro.followTabs !== false ? 'on' : 'off');
   set('sum-toolbar', `auto ${macro.auto ? 'on' : 'off'} · loop ${macro.loop ? 'on' : 'off'} · tabs ${macro.followTabs !== false ? 'on' : 'off'}`);
-  set('sum-add', macro.steps.length ? `${macro.steps.length} step${macro.steps.length === 1 ? '' : 's'}` : '');
+  const total = countSteps(macro.steps);
+  set('sum-add', total ? `${total} step${total === 1 ? '' : 's'}` : '');
 
   const logEl = document.getElementById('sum-log');
   if (logEl) logEl.textContent = state.logs.length ? `${state.logs.length} lines` : '';
@@ -499,15 +660,150 @@ function renderSteps() {
     return;
   }
   ui.empty.style.display = 'none';
-
-  steps.forEach((step, idx) => {
-    ui.steps.appendChild(buildStepRow(step, idx, steps.length));
-  });
+  ui.steps.appendChild(renderStepList(steps, []));
 }
 
-function buildStepRow(step, idx, total) {
+function renderStepList(list, path) {
+  const wrap = document.createElement('div');
+  wrap.className = 'step-list';
+  list.forEach((step, idx) => wrap.appendChild(buildStepRow(step, idx, list.length, path)));
+  return wrap;
+}
+
+/** One branch (then/else) of an If step, with its own add-step menu. */
+function buildBranch(step, childPath, key, title) {
+  const list = Array.isArray(step[key]) ? step[key] : (step[key] = []);
+
+  const wrap = document.createElement('div');
+  wrap.className = 'branch';
+
+  const head = document.createElement('div');
+  head.className = 'branch-head';
+
+  const label = document.createElement('span');
+  label.className = 'branch-title';
+  label.textContent = title;
+
+  const count = document.createElement('span');
+  count.className = 'branch-count';
+  count.textContent = list.length ? `${list.length}` : 'empty';
+
+  const picker = document.createElement('div');
+  picker.className = 'branch-picker';
+
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'branch-add';
+  add.textContent = '+ add step';
+  add.addEventListener('click', () => {
+    picker.style.display = picker.style.display === 'flex' ? 'none' : 'flex';
+  });
+
+  ADD_MENU.forEach(([action, actionLabel]) => {
+    const btn = addButton(action, actionLabel);
+    btn.addEventListener('click', () => {
+      picker.style.display = 'none';
+      onAddStep(action, childPath);
+    });
+    picker.appendChild(btn);
+  });
+
+  head.appendChild(label);
+  head.appendChild(count);
+  head.appendChild(add);
+  wrap.appendChild(head);
+  wrap.appendChild(picker);
+  wrap.appendChild(renderStepList(list, childPath));
+  return wrap;
+}
+
+/** Editor for an If step's condition. */
+function buildConditionEditor(step) {
+  const cond = step.condition || (step.condition = defaultCondition());
+
+  const wrap = document.createElement('div');
+  wrap.className = 'condition';
+
+  const commit = (patch) => {
+    Object.assign(cond, patch);
+    persist();
+    renderSteps();
+    updateSummaries();
+  };
+
+  wrap.appendChild(
+    fieldRow('Type', selectInput(CONDITION_TYPES, cond.type || 'exists', (v) => commit({ type: v })))
+  );
+
+  if (cond.type === 'url') {
+    wrap.appendChild(
+      fieldRow('Pattern', textInput(cond.pattern || '', (v) => { cond.pattern = v; schedulePersist(); }))
+    );
+  } else {
+    const target = document.createElement('div');
+    target.className = 'target';
+
+    if (cond.target) {
+      const labelEl = document.createElement('div');
+      labelEl.className = 'target-label';
+      labelEl.title = cond.target.label || '';
+      labelEl.textContent = cond.target.label || cond.target.selector || 'element';
+
+      const selector = document.createElement('div');
+      selector.className = 'selector';
+      selector.textContent = cond.target.selector || '(no selector)';
+
+      target.appendChild(labelEl);
+      target.appendChild(selector);
+    } else {
+      const hint = document.createElement('div');
+      hint.className = 'target-label';
+      hint.textContent = 'No element picked yet.';
+      target.appendChild(hint);
+    }
+
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'repick-btn';
+    pick.textContent = cond.target ? 're-pick element' : 'pick element…';
+    pick.addEventListener('click', () => startPick('if', { stepId: step.id, slot: 'condition' }));
+    target.appendChild(pick);
+
+    wrap.appendChild(target);
+  }
+
+  if (cond.type === 'exists') {
+    wrap.appendChild(
+      fieldRow('State', selectInput(CONDITION_STATES, cond.state || 'visible', (v) => commit({ state: v })))
+    );
+  }
+
+  if (cond.type === 'text' || cond.type === 'attr') {
+    if (cond.type === 'attr') {
+      wrap.appendChild(
+        fieldRow('Attr', textInput(cond.attr || 'href', (v) => { cond.attr = v; schedulePersist(); }))
+      );
+    }
+    wrap.appendChild(
+      fieldRow(
+        'Op',
+        selectInput(CONDITION_OPS, cond.op || (cond.type === 'text' ? 'contains' : 'is'), (v) => commit({ op: v }))
+      )
+    );
+    wrap.appendChild(
+      fieldRow('Value', textInput(cond.value || '', (v) => { cond.value = v; schedulePersist(); }))
+    );
+    wrap.appendChild(checkboxRow('case', !!cond.caseSensitive, (v) => commit({ caseSensitive: v })));
+  }
+
+  wrap.appendChild(checkboxRow('not', !!cond.negate, (v) => commit({ negate: v })));
+  return wrap;
+}
+
+function buildStepRow(step, idx, total, path) {
   const row = document.createElement('div');
   row.className = 'step';
+  row.dataset.stepId = step.id;
 
   const head = document.createElement('div');
   head.className = 'step-head';
@@ -528,13 +824,26 @@ function buildStepRow(step, idx, total) {
 
   head.appendChild(index);
   head.appendChild(action);
+
+  if (step.action === 'if') {
+    const sub = document.createElement('span');
+    sub.className = 'step-sub';
+    sub.textContent = conditionSummary(step.condition);
+    sub.title = conditionSummary(step.condition);
+    head.appendChild(sub);
+  }
+
   head.appendChild(tools);
   row.appendChild(head);
 
   const body = document.createElement('div');
   body.className = 'step-body';
 
-  if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
+  if (step.action === 'if') {
+    body.appendChild(buildConditionEditor(step));
+    body.appendChild(buildBranch(step, path.concat([idx, 'then']), 'then', 'Then'));
+    body.appendChild(buildBranch(step, path.concat([idx, 'else']), 'else', 'Else'));
+  } else if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
     body.appendChild(
@@ -681,7 +990,7 @@ function buildTargetBlock(step) {
   const repick = document.createElement('button');
   repick.className = 'repick-btn';
   repick.textContent = 're-pick element';
-  repick.addEventListener('click', () => startPick(step.action, step.id));
+  repick.addEventListener('click', () => startPick(step.action, { stepId: step.id }));
   wrap.appendChild(repick);
 
   return wrap;
@@ -713,7 +1022,7 @@ function buildScrollTarget(step) {
   const pick = document.createElement('button');
   pick.className = 'repick-btn';
   pick.textContent = step.target ? 're-pick element' : 'scroll to element…';
-  pick.addEventListener('click', () => startPick('scroll', step.id));
+  pick.addEventListener('click', () => startPick('scroll', { stepId: step.id }));
   wrap.appendChild(pick);
 
   if (step.target) {

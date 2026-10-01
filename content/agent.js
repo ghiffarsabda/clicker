@@ -35,6 +35,13 @@
         window.__CLICKER_CANCEL__ = true;
         sendResponse({ ok: true });
         return true;
+      case 'EVALUATE_CONDITION':
+        try {
+          sendResponse({ ok: true, result: evaluateCondition(msg.condition) });
+        } catch (err) {
+          sendResponse({ ok: false, error: String((err && err.message) || err) });
+        }
+        return true;
     }
     return true;
   });
@@ -716,6 +723,104 @@
 
     const amount = Math.max(1, Number(step.amount) || 600);
     await humanScroll(scroller, (step.direction === 'up' ? -1 : 1) * amount, duration);
+  }
+
+  /* ------------------------------------------------------------------ *
+   *  Conditions (for If steps)                                          *
+   * ------------------------------------------------------------------ */
+
+  /** Like resolveTarget, but does not require the element to be visible. */
+  function resolveAny(target, opts = {}) {
+    if (!target) return null;
+    const candidates =
+      Array.isArray(target.fallbacks) && target.fallbacks.length
+        ? target.fallbacks
+        : [{ type: 'css', value: target.selector }];
+
+    for (const c of candidates) {
+      if (!c || !c.value) continue;
+      if (c.kind === 'text' && !opts.textMatch) continue;
+      if (c.type === 'css') {
+        try {
+          const el = document.querySelector(c.value);
+          if (el) return el;
+        } catch (_) {}
+      } else if (c.type === 'text') {
+        const el = findByText(c.value);
+        if (el) return el;
+      }
+    }
+    return null;
+  }
+
+  /** Wildcard pattern -> RegExp, same rules as the worker's url matcher. */
+  function globToRegExp(pattern) {
+    const p = String(pattern || '').trim();
+    if (!p) return null;
+    let glob = p;
+    if (!glob.includes('://') && !glob.includes('*')) glob = '*' + glob + '*';
+    const esc = (s) => s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp('^' + glob.split('*').map(esc).join('.*') + '$');
+  }
+
+  function compare(actual, op, expected, caseSensitive) {
+    let a = String(actual == null ? '' : actual);
+    let b = String(expected == null ? '' : expected);
+    if (!caseSensitive) {
+      a = a.toLowerCase();
+      b = b.toLowerCase();
+    }
+    switch (op) {
+      case 'contains':
+        return a.includes(b);
+      case 'starts':
+        return a.startsWith(b);
+      case 'ends':
+        return a.endsWith(b);
+      case 'notEmpty':
+        return a.trim().length > 0;
+      case 'regex':
+        try {
+          return new RegExp(b, caseSensitive ? '' : 'i').test(String(actual == null ? '' : actual));
+        } catch (_) {
+          return false;
+        }
+      default:
+        return a === b; // 'is'
+    }
+  }
+
+  /** Evaluate an If condition in the page. The worker applies `negate` afterwards. */
+  function evaluateCondition(condition) {
+    const cond = condition || {};
+    const opts = { textMatch: !!cond.textMatch };
+
+    if (cond.type === 'url' || cond.type === 'urlPattern') {
+      const rx = globToRegExp(cond.pattern);
+      return rx ? rx.test(location.href) : true;
+    }
+
+    if (cond.type === 'text') {
+      const el = resolveTarget(cond.target, opts) || resolveAny(cond.target, opts);
+      if (!el) return false;
+      const txt = (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ');
+      return compare(txt, cond.op || 'contains', cond.value || '', cond.caseSensitive);
+    }
+
+    if (cond.type === 'attr') {
+      const el = resolveTarget(cond.target, opts) || resolveAny(cond.target, opts);
+      if (!el) return false;
+      const attr = cond.attr || 'href';
+      const val = attr === 'value' ? (el.value == null ? '' : el.value) : el.getAttribute(attr) || '';
+      return compare(val, cond.op || 'is', cond.value || '', cond.caseSensitive);
+    }
+
+    // 'exists' — present / visible / hidden
+    const el = resolveAny(cond.target, opts);
+    const visible = !!el && isVisible(el);
+    if (cond.state === 'present') return !!el;
+    if (cond.state === 'hidden') return !visible;
+    return visible;
   }
 
   async function executeStep(step) {

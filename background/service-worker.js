@@ -162,36 +162,15 @@ async function runMacro(macroId, opts = {}) {
   try {
     await ensureAgent(tab.id);
 
+    activeRun.looping = looping;
+
     for (let iteration = 1; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
+      activeRun.iteration = iteration;
+      activeRun.loopTotal = totalLabel;
 
-      for (let i = 0; i < macro.steps.length; i++) {
-        if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
-        const step = macro.steps[i];
-
-        // A previous step may have opened a tab after a delay — move onto it first.
-        if (activeRun.follow) await maybeFollowNewTab();
-
-        emit({
-          type: 'RUN_PROGRESS',
-          index: i,
-          total: macro.steps.length,
-          action: step.action,
-          command: step.action === 'browser' ? step.command : undefined,
-          url: activeRun.tabUrl,
-          iteration: looping ? iteration : null,
-          iterations: totalLabel
-        });
-        activeRun.stepStartedAt = Date.now();
-        const res = await runStep(step);
-
-        // Catch a tab this step just opened, so the following step can use it.
-        const adopted = activeRun.follow ? await maybeFollowNewTab() : null;
-        if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
-          await openLinkFallback(res.link, res.urlBefore);
-        }
-      }
+      await runSteps(macro.steps, 0);
 
       if (iteration < limit && interval > 0) await cancellableSleep(interval);
     }
@@ -217,9 +196,87 @@ async function runMacro(macroId, opts = {}) {
   }
 }
 
-async function runStep(step) {
+/**
+ * Run a list of steps. If steps nest (an If step holds then/else branches),
+ * this recurses into whichever branch the condition selects.
+ */
+async function runSteps(steps, depth) {
+  for (let i = 0; i < steps.length; i++) {
+    if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
+    const step = steps[i];
+
+    // A previous step may have opened a tab after a delay — move onto it first.
+    if (activeRun.follow) await maybeFollowNewTab();
+
+    emit({
+      type: 'RUN_PROGRESS',
+      index: i,
+      total: steps.length,
+      depth: depth || 0,
+      action: step.action,
+      command: step.action === 'browser' ? step.command : undefined,
+      url: activeRun.tabUrl,
+      iteration: activeRun.looping ? activeRun.iteration : null,
+      iterations: activeRun.loopTotal
+    });
+
+    activeRun.stepStartedAt = Date.now();
+    const res = await runStep(step, depth || 0);
+
+    // Catch a tab this step just opened, so the following step can use it.
+    const adopted = activeRun.follow ? await maybeFollowNewTab() : null;
+    if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
+      await openLinkFallback(res.link, res.urlBefore);
+    }
+  }
+}
+
+/** Short human description of an If condition, for the activity log. */
+function conditionLabel(condition) {
+  const c = condition || {};
+  const neg = c.negate ? 'not ' : '';
+  const target = (c.target && (c.target.label || c.target.selector)) || 'element';
+  if (c.type === 'url') return `${neg}url matches ${c.pattern || '*'}`;
+  if (c.type === 'text') return `${neg}${target} text ${c.op || 'contains'} "${c.value || ''}"`;
+  if (c.type === 'attr') return `${neg}${target} ${c.attr || 'href'} ${c.op || 'is'} "${c.value || ''}"`;
+  return `${neg}${target} is ${c.state || 'visible'}`;
+}
+
+/** Evaluate an If condition. URL checks run here; DOM checks run in the page. */
+async function evaluateCondition(condition, tabId) {
+  if (!condition) return true;
+
+  let raw;
+  if (condition.type === 'url') {
+    const url = await chrome.tabs
+      .get(tabId)
+      .then((t) => t.url || '')
+      .catch(() => '');
+    raw = urlMatches(condition.pattern || '', url);
+  } else {
+    let res;
+    try {
+      res = await chrome.tabs.sendMessage(tabId, { type: 'EVALUATE_CONDITION', condition });
+    } catch (e) {
+      throw new Error('Could not evaluate the condition — the page is unreachable');
+    }
+    if (!res || !res.ok) throw new Error((res && res.error) || 'Could not evaluate the condition');
+    raw = !!res.result;
+  }
+
+  return condition.negate ? !raw : raw;
+}
+
+async function runStep(step, depth) {
   const tabId = activeRun && activeRun.tabId;
   if (!tabId) throw new Error('No active tab');
+
+  if (step.action === 'if') {
+    const ok = await evaluateCondition(step.condition, tabId);
+    emit({ type: 'BRANCH', result: ok, label: conditionLabel(step.condition) });
+    await runSteps(ok ? step.then || [] : step.else || [], (depth || 0) + 1);
+    return;
+  }
 
   if (step.action === 'wait') {
     await sleep(Math.max(0, Number(step.ms) || 0));
