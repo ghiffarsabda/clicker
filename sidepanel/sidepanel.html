@@ -121,6 +121,27 @@
     </div>
   </section>
 
+  <section class="panel" data-panel="data">
+    <button class="panel-head" type="button">
+      <span class="panel-title">Backup</span>
+      <span class="panel-summary" id="sum-data"></span>
+      <span class="chev" aria-hidden="true"></span>
+    </button>
+    <div class="panel-body">
+      <div class="add-buttons">
+        <button class="add-btn" id="btn-export" type="button">Export</button>
+        <button class="add-btn" id="btn-import" type="button">Import</button>
+      </div>
+      <input type="file" id="import-file" accept="application/json,.json" style="display:none">
+      <div class="field-row" id="import-choice" style="display:none">
+        <span class="field-label" id="import-info"></span>
+        <button class="link-btn" id="btn-import-replace" type="button">replace all</button>
+        <button class="link-btn" id="btn-import-merge" type="button">merge</button>
+        <button class="link-btn" id="btn-import-cancel" type="button">cancel</button>
+      </div>
+    </div>
+  </section>
+
   <section class="panel" data-panel="log">
     <button class="panel-head" type="button">
       <span class="panel-title">Activity</span>

@@ -34,6 +34,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
   three collapse into one. Every header shows a live summary while folded
   (`auto off · loop off · tabs on`, `on · example.com`, `4 steps`), the settings sit below the step
   list so the steps keep the room, and your open/closed state is remembered.
+- **Export / import** — the `Backup` panel saves every macro (with its settings and nested steps)
+  to a dated JSON file, and imports one back — either **replacing** everything or **merging** into
+  what you already have.
 - **Activity log** — per-step progress and errors.
 
 ## Install (unpacked)
@@ -205,6 +208,17 @@ synthetic key events, because Chrome ignores untrusted events for its own shortc
 Tab-creating and tab-moving commands move the run with them, so a following step acts on the new
 tab (or the surviving one after a close). Closing the last tab or window stops the macro with a
 clear error rather than failing silently.
+
+## Backup: export / import
+
+The **Backup** panel moves your macros between machines or keeps a copy safe.
+
+- **Export** downloads `clicker-macros-YYYY-MM-DD_HHMM.json` containing every macro — steps,
+  branches, and per-macro settings (auto, loop, follow-tabs, delays).
+- **Import** reads such a file (or a bare array of macros, or a single macro) and asks what to do:
+  **replace all** or **merge** them in alongside your existing macros. Merging re-mints any
+  colliding macro ids, so nothing is overwritten. `cancel` abandons the import, and a malformed
+  file is rejected without touching your macros.
 
 ## Keyboard shortcuts
 

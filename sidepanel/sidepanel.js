@@ -92,7 +92,7 @@ const BROWSER_URL_COMMANDS = ['newTab', 'newWindow'];
 const BROWSER_ACTIVATE_COMMANDS = ['newTab', 'duplicateTab', 'reopenTab'];
 
 /** Which panels start collapsed — the settings sit at the bottom and stay out of the way. */
-const DEFAULT_COLLAPSED = { add: false, toolbar: true, auto: true, loop: true, tabs: true, log: false };
+const DEFAULT_COLLAPSED = { add: false, toolbar: true, auto: true, loop: true, tabs: true, data: true, log: false };
 
 const state = {
   macros: [],
@@ -103,6 +103,7 @@ const state = {
   pickStepId: null,
   pickSlot: 'target',
   logs: [],
+  pendingImport: null,
   collapsed: Object.assign({}, DEFAULT_COLLAPSED)
 };
 
@@ -130,6 +131,11 @@ async function init() {
   ui.loopCount = $('#loop-count');
   ui.loopInterval = $('#loop-interval');
   ui.followToggle = $('#follow-toggle');
+  ui.exportBtn = $('#btn-export');
+  ui.importBtn = $('#btn-import');
+  ui.importFile = $('#import-file');
+  ui.importChoice = $('#import-choice');
+  ui.importInfo = $('#import-info');
 
   fillAddButtons();
   bindEvents();
@@ -406,6 +412,21 @@ function bindEvents() {
     log(macro.followTabs ? 'Following new tabs.' : 'Staying on the tab the macro started on.');
   });
 
+  ui.exportBtn.addEventListener('click', exportMacros);
+  ui.importBtn.addEventListener('click', () => {
+    hideImportChoice();
+    ui.importFile.value = '';
+    ui.importFile.click();
+  });
+  ui.importFile.addEventListener('change', onImportFileChosen);
+  document.getElementById('btn-import-replace').addEventListener('click', () => applyImport('replace'));
+  document.getElementById('btn-import-merge').addEventListener('click', () => applyImport('merge'));
+  document.getElementById('btn-import-cancel').addEventListener('click', () => {
+    state.pendingImport = null;
+    hideImportChoice();
+    log('Import cancelled');
+  });
+
   $('#btn-clear-log').addEventListener('click', () => {
     state.logs = [];
     renderLog();
@@ -618,6 +639,7 @@ function updateSummaries() {
   set('sum-toolbar', `auto ${macro.auto ? 'on' : 'off'} · loop ${macro.loop ? 'on' : 'off'} · tabs ${macro.followTabs !== false ? 'on' : 'off'}`);
   const total = countSteps(macro.steps);
   set('sum-add', total ? `${total} step${total === 1 ? '' : 's'}` : '');
+  set('sum-data', `${state.macros.length} macro${state.macros.length === 1 ? '' : 's'}`);
 
   const logEl = document.getElementById('sum-log');
   if (logEl) logEl.textContent = state.logs.length ? `${state.logs.length} lines` : '';
@@ -1303,6 +1325,143 @@ function log(text, kind) {
   if (state.logs.length > 300) state.logs.shift();
   renderLog();
   updateSummaries();
+}
+
+/* ------------------------------------------------------------------ *
+ *  Export / import                                                    *
+ * ------------------------------------------------------------------ */
+
+const EXPORT_VERSION = 1;
+
+function fileStamp() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+}
+
+/** Save text as a file. Falls back to a data: URL if blob URLs aren't available. */
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'application/json' });
+  let url = '';
+  try {
+    url = URL.createObjectURL(blob);
+  } catch (_) {}
+  const link = document.createElement('a');
+  link.href = url || 'data:application/json;charset=utf-8,' + encodeURIComponent(text);
+  link.download = filename;
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  if (url) setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function exportPayload() {
+  return {
+    app: 'clicker',
+    version: EXPORT_VERSION,
+    exportedAt: new Date().toISOString(),
+    selectedMacroId: state.selectedId,
+    macros: state.macros
+  };
+}
+
+function exportMacros() {
+  downloadText(`clicker-macros-${fileStamp()}.json`, JSON.stringify(exportPayload(), null, 2));
+  log(`Exported ${state.macros.length} macro${state.macros.length === 1 ? '' : 's'}`, 'ok');
+}
+
+function sanitizeSteps(list) {
+  return (Array.isArray(list) ? list : []).map((raw) => {
+    const step = Object.assign({}, raw);
+    step.id = typeof step.id === 'string' && step.id ? step.id : uid();
+    if (step.action === 'if') {
+      step.condition = step.condition || defaultCondition();
+      step.then = sanitizeSteps(step.then);
+      step.else = sanitizeSteps(step.else);
+    }
+    return step;
+  });
+}
+
+function sanitizeMacro(raw) {
+  const macro = Object.assign({}, raw);
+  macro.id = typeof macro.id === 'string' && macro.id ? macro.id : uid();
+  macro.name = typeof macro.name === 'string' && macro.name ? macro.name : 'Imported macro';
+  macro.steps = sanitizeSteps(macro.steps);
+  if (typeof macro.createdAt !== 'number') macro.createdAt = Date.now();
+  return macro;
+}
+
+/** Accepts an export payload, a bare array of macros, or a single macro. */
+function parseMacroFile(text) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    throw new Error('that file is not valid JSON');
+  }
+  const list = Array.isArray(data)
+    ? data
+    : data && Array.isArray(data.macros)
+      ? data.macros
+      : data && typeof data === 'object' && (data.steps || data.name)
+        ? [data]
+        : null;
+
+  if (!list || !list.length) throw new Error('no macros found in that file');
+  return list.map(sanitizeMacro);
+}
+
+function hideImportChoice() {
+  ui.importChoice.style.display = 'none';
+  ui.importInfo.textContent = '';
+}
+
+function onImportFileChosen() {
+  const file = ui.importFile.files && ui.importFile.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      state.pendingImport = parseMacroFile(String(reader.result));
+      const n = state.pendingImport.length;
+      ui.importInfo.textContent = `${n} macro${n === 1 ? '' : 's'} ready`;
+      ui.importChoice.style.display = 'flex';
+      log(`Read ${n} macro(s) from ${file.name}`);
+    } catch (err) {
+      state.pendingImport = null;
+      hideImportChoice();
+      log(`Import failed — ${err.message}`, 'err');
+    }
+  };
+  reader.onerror = () => log('Import failed — could not read that file', 'err');
+  reader.readAsText(file);
+}
+
+async function applyImport(mode) {
+  const incoming = state.pendingImport || [];
+  state.pendingImport = null;
+  hideImportChoice();
+  if (!incoming.length) return;
+
+  if (mode === 'replace') {
+    state.macros = incoming;
+    state.selectedId = incoming[0].id;
+    log(`Replaced all macros with ${incoming.length} imported macro(s)`, 'ok');
+  } else {
+    const taken = new Set(state.macros.map((m) => m.id));
+    for (const macro of incoming) {
+      if (taken.has(macro.id)) macro.id = uid();
+      state.macros.push(macro);
+      taken.add(macro.id);
+    }
+    log(`Merged in ${incoming.length} macro(s)`, 'ok');
+  }
+
+  await persist();
+  render();
 }
 
 function renderLog() {
