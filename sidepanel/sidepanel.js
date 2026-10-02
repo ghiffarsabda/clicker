@@ -835,6 +835,32 @@ function buildConditionEditor(step) {
   return wrap;
 }
 
+/** A step's header text: a custom name replaces the action title, which stays visible as the detail. */
+function stepHeading(step) {
+  const actionName = (ACTIONS[step.action] && ACTIONS[step.action].label) || step.action;
+  const name = typeof step.label === 'string' ? step.label.trim() : '';
+  const detail = [name ? actionName : '', step.action === 'if' ? conditionSummary(step.condition) : '']
+    .filter(Boolean)
+    .join(' · ');
+  return { title: name || actionName, detail, custom: !!name };
+}
+
+/** The per-step Name field — renames the step without hiding what it actually does. */
+function buildNameRow(step, actionEl, subEl) {
+  const input = textInput(step.label || '', (v) => {
+    updateStep(step.id, { label: v });
+    const heading = stepHeading(step);
+    actionEl.textContent = heading.title;
+    actionEl.title = heading.title;
+    actionEl.classList.toggle('custom', heading.custom);
+    subEl.textContent = heading.detail;
+    subEl.title = heading.detail;
+    subEl.style.display = heading.detail ? '' : 'none';
+  });
+  input.placeholder = (ACTIONS[step.action] && ACTIONS[step.action].label) || step.action;
+  return fieldRow('Name', input);
+}
+
 function buildStepRow(step, idx, total, path) {
   const row = document.createElement('div');
   row.className = 'step';
@@ -847,9 +873,18 @@ function buildStepRow(step, idx, total, path) {
   index.className = 'step-index';
   index.textContent = String(idx + 1);
 
+  const heading = stepHeading(step);
+
   const action = document.createElement('span');
-  action.className = 'step-action';
-  action.textContent = (ACTIONS[step.action] && ACTIONS[step.action].label) || step.action;
+  action.className = 'step-action' + (heading.custom ? ' custom' : '');
+  action.textContent = heading.title;
+  action.title = heading.title;
+
+  const sub = document.createElement('span');
+  sub.className = 'step-sub';
+  sub.textContent = heading.detail;
+  sub.title = heading.detail;
+  sub.style.display = heading.detail ? '' : 'none';
 
   const tools = document.createElement('div');
   tools.className = 'step-tools';
@@ -859,15 +894,7 @@ function buildStepRow(step, idx, total, path) {
 
   head.appendChild(index);
   head.appendChild(action);
-
-  if (step.action === 'if') {
-    const sub = document.createElement('span');
-    sub.className = 'step-sub';
-    sub.textContent = conditionSummary(step.condition);
-    sub.title = conditionSummary(step.condition);
-    head.appendChild(sub);
-  }
-
+  head.appendChild(sub);
   head.appendChild(tools);
   row.appendChild(head);
 
@@ -1064,6 +1091,8 @@ function buildStepRow(step, idx, total, path) {
     }
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   }
+
+  body.appendChild(buildNameRow(step, action, sub));
 
   row.appendChild(body);
   return row;

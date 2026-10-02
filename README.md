@@ -34,6 +34,10 @@ under the cursor" approach — and turns it into durable selectors that survive 
   three collapse into one. Every header shows a live summary while folded
   (`auto off · loop off · tabs on`, `on · example.com`, `4 steps`), the settings sit below the step
   list so the steps keep the room, and your open/closed state is remembered.
+- **Name any step** — every step has a `Name` field. Type one and it becomes the step's title in
+  the list; the action it performs stays visible underneath, so `refill the cart` still reads as
+  `Click`. Leave it blank and the step keeps its plain action name. Names are cosmetic — they are
+  kept in exports too.
 - **Export / import** — the `Backup` panel saves every macro (with its settings and nested steps)
   to a dated JSON file, and imports one back — either **replacing** everything or **merging** into
   what you already have.

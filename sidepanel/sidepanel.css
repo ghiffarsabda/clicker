@@ -392,6 +392,15 @@ body {
   font-weight: 700;
   font-size: 12px;
   color: #fca5a5;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A step the user renamed reads in plain text instead of the action colour. */
+.step-action.custom {
+  color: var(--text);
 }
 
 .step-tools {
