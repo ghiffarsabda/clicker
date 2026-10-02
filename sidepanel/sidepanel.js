@@ -106,6 +106,7 @@ const state = {
   pickSlot: 'target',
   logs: [],
   pendingImport: null,
+  dragStepId: null,
   collapsed: Object.assign({}, DEFAULT_COLLAPSED)
 };
 
@@ -291,6 +292,104 @@ function moveStep(stepId, dir) {
   [loc.list[loc.index], loc.list[next]] = [loc.list[next], loc.list[loc.index]];
   persist();
   renderSteps();
+}
+
+/** True when both steps live in the same branch list — dragging stays inside one list. */
+function sameList(a, b) {
+  const from = findLocation(a);
+  const to = findLocation(b);
+  return !!(from && to && from.list === to.list);
+}
+
+/** Drop a dragged step just before or after a target step in the target's own list. */
+function moveStepTo(dragId, targetId, position) {
+  if (!dragId || !targetId || dragId === targetId) return false;
+  const from = findLocation(dragId);
+  const to = findLocation(targetId);
+  if (!from || !to || from.list !== to.list) return false;
+
+  const [step] = from.list.splice(from.index, 1);
+  let index = to.index;
+  if (from.index < to.index) index -= 1; // the list shifted left under us
+  if (position === 'after') index += 1;
+  to.list.splice(index, 0, step);
+
+  persist();
+  renderSteps();
+  return true;
+}
+
+/** Which side of a row a drop would land on, from the pointer's half of the row. */
+function dropPosition(row, event) {
+  const rect = row.getBoundingClientRect ? row.getBoundingClientRect() : null;
+  if (!rect || typeof event.clientY !== 'number') return 'after';
+  return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+}
+
+function clearDropMarkers() {
+  document.querySelectorAll('.step.drop-before, .step.drop-after').forEach((el) => {
+    el.classList.remove('drop-before', 'drop-after');
+  });
+}
+
+function markDrop(row, position) {
+  clearDropMarkers();
+  row.classList.add(position === 'before' ? 'drop-before' : 'drop-after');
+}
+
+/** Wire a row for drag-to-reorder (the ↑/↓ buttons remain, for keyboard-free use). */
+function wireDragToReorder(row, step, body) {
+  // Only the row the pointer is directly over acts, so nested rows do not fight their parents.
+  const isOwnTarget = (event) => !!(event.target && event.target.closest && event.target.closest('.step') === row);
+  const canDrop = () => !!(state.dragStepId && state.dragStepId !== step.id && sameList(state.dragStepId, step.id));
+
+  row.draggable = true;
+
+  row.addEventListener('dragstart', (event) => {
+    if (!isOwnTarget(event)) return; // a nested row owns this drag
+    // Never hijack a drag that began in this row's fields — inputs need selection and carets.
+    if (body.contains(event.target)) {
+      event.preventDefault();
+      return;
+    }
+    state.dragStepId = step.id;
+    row.classList.add('dragging');
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', step.id);
+    }
+  });
+
+  row.addEventListener('dragend', (event) => {
+    if (!isOwnTarget(event)) return;
+    state.dragStepId = null;
+    row.classList.remove('dragging');
+    clearDropMarkers();
+  });
+
+  row.addEventListener('dragover', (event) => {
+    if (!isOwnTarget(event) || !canDrop()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    markDrop(row, dropPosition(row, event));
+  });
+
+  row.addEventListener('dragleave', (event) => {
+    if (!isOwnTarget(event)) return;
+    row.classList.remove('drop-before', 'drop-after');
+  });
+
+  row.addEventListener('drop', (event) => {
+    if (!isOwnTarget(event) || !canDrop()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const position = dropPosition(row, event);
+    const dragId = state.dragStepId;
+    state.dragStepId = null;
+    clearDropMarkers();
+    moveStepTo(dragId, step.id, position);
+  });
 }
 
 /* ---------------------------------------------------------------- *
@@ -1155,6 +1254,7 @@ function buildStepRow(step, idx, total, path) {
   body.appendChild(buildNameRow(step, applyHeading));
 
   row.appendChild(body);
+  wireDragToReorder(row, step, body);
   return row;
 }
 

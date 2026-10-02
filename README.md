@@ -10,7 +10,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
 ## Features
 
 - **Visual step builder** — no scripting. Click `Click` / `Type` / `Key`, then pick the target
-  element on the page. Reorder and delete steps freely.
+  element on the page. Reorder steps with the `↑` / `↓` buttons or by **dragging a step card up or
+  down** (drag from the step's header — its name and fields stay selectable). Dragging works inside
+  the current list, so a step nested in an If or Gamble branch reorders within that branch.
 - **Text-independent targeting** — an element is identified by its *structure*, not its label:
   `id` → `data-testid`/`data-*` → `aria-label` → `role`/`type`/`name`/`placeholder` → class
   signature → structural position. A button whose text rotates (`"do this"` → `"do that"`) keeps

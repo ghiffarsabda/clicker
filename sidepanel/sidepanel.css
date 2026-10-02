@@ -373,6 +373,24 @@ body {
   display: flex;
   align-items: center;
   gap: 7px;
+  cursor: grab;
+}
+
+.step.dragging {
+  opacity: 0.45;
+}
+
+.step.dragging .step-head {
+  cursor: grabbing;
+}
+
+/* Where a dragged step would land */
+.step.drop-before {
+  box-shadow: 0 -3px 0 0 var(--accent);
+}
+
+.step.drop-after {
+  box-shadow: 0 3px 0 0 var(--accent);
 }
 
 .step-index {
