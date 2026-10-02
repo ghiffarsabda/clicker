@@ -393,6 +393,20 @@ body {
   box-shadow: 0 3px 0 0 var(--accent);
 }
 
+.branch-sub {
+  flex: 1 0 100%;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Buttons that move an existing step rather than adding a new one */
+.move-from-below {
+  border-style: dashed;
+}
+
 .step-index {
   width: 20px;
   height: 20px;

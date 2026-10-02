@@ -184,6 +184,9 @@ Conditions:
 Tick **not** to invert any condition, and **case** to make text comparisons case-sensitive.
 The activity log reports which branch was taken, and nested steps are indented.
 
+An If's branches can also adopt steps that already sit below the If, the same way a Gamble does —
+see *Reuse steps that are already there* above.
+
 ## Gamble (chance)
 
 A **Gamble** step flips a weighted coin and only runs the steps you put inside it when the coin
@@ -196,6 +199,10 @@ step of a macro inside a Gamble and the whole run is a chance.
   can go in either, including more Gambles, Ifs and other steps — nesting works to any depth.
 - **Leave Fails empty** for a plain "maybe skip this" gate: those steps simply don't happen and the
   macro continues with the next step. Fill it in to have something else happen instead.
+- **Reuse steps that are already there.** Open a branch's `+ add step` menu and, under
+  *or move one from below*, every step sitting below the Gamble is listed — click one (or
+  **move all N**) to move it inside instead of picking the element all over again. The step keeps its
+  target, and nothing is duplicated: it simply moves into the branch.
 - **Only the steps inside are affected.** Everything before and after a Gamble always runs, so you
   can gate one fragile part of a macro rather than the whole thing.
 - The roll is **fresh every time the step is reached**, so in **Loop mode** each pass gambles

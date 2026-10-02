@@ -319,6 +319,61 @@ function moveStepTo(dragId, targetId, position) {
   return true;
 }
 
+/** The steps that sit after a container in its own list — the "from below" candidates. */
+function stepsBelow(containerId) {
+  const loc = findLocation(containerId);
+  return loc ? loc.list.slice(loc.index + 1) : [];
+}
+
+/** A one-line label for an existing step offered up for reuse. */
+function stepMenuLabel(step) {
+  const heading = stepHeading(step);
+  const target = step.target && (step.target.label || step.target.selector);
+  return target ? `${heading.title} — ${target}` : heading.title;
+}
+
+/**
+ * Move an existing sibling step into one of a container's branches, so a step can
+ * be reused instead of being re-built by picking the element all over again.
+ */
+function moveStepIntoBranch(stepId, containerId, key) {
+  const container = findStep(containerId);
+  const containerLoc = findLocation(containerId);
+  const from = findLocation(stepId);
+  if (!container || !containerLoc || !from) return false;
+  if (from.list !== containerLoc.list || from.index <= containerLoc.index) return false; // only from below
+
+  const [moved] = from.list.splice(from.index, 1);
+  const branch = Array.isArray(container[key]) ? container[key] : (container[key] = []);
+  branch.push(moved);
+  persist();
+  renderSteps();
+  return true;
+}
+
+/** Move several steps below a container into one branch in a single pass. */
+function moveAllIntoBranch(ids, containerId, key) {
+  const container = findStep(containerId);
+  const containerLoc = findLocation(containerId);
+  if (!container || !containerLoc) return 0;
+
+  const branch = Array.isArray(container[key]) ? container[key] : (container[key] = []);
+  let moved = 0;
+  ids.forEach((id) => {
+    const from = findLocation(id);
+    if (!from || from.list !== containerLoc.list || from.index <= containerLoc.index) return;
+    const [step] = from.list.splice(from.index, 1);
+    branch.push(step);
+    moved += 1;
+  });
+
+  if (moved) {
+    persist();
+    renderSteps();
+  }
+  return moved;
+}
+
 /** Which side of a row a drop would land on, from the pointer's half of the row. */
 function dropPosition(row, event) {
   const rect = row.getBoundingClientRect ? row.getBoundingClientRect() : null;
@@ -849,6 +904,43 @@ function buildBranch(step, childPath, key, title) {
     });
     picker.appendChild(btn);
   });
+
+  /* Reuse a step that already exists below instead of building it again. */
+  const below = stepsBelow(step.id);
+  if (below.length) {
+    const divider = document.createElement('div');
+    divider.className = 'branch-sub';
+    divider.textContent = 'or move one from below';
+    picker.appendChild(divider);
+
+    below.forEach((candidate) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'add-btn small move-from-below';
+      btn.dataset.moveStep = candidate.id;
+      btn.textContent = stepMenuLabel(candidate);
+      btn.title = 'Move this existing step in here, instead of adding a new one';
+      btn.addEventListener('click', () => {
+        picker.style.display = 'none';
+        moveStepIntoBranch(candidate.id, step.id, key);
+      });
+      picker.appendChild(btn);
+    });
+
+    if (below.length > 1) {
+      const all = document.createElement('button');
+      all.type = 'button';
+      all.className = 'add-btn small move-from-below';
+      all.dataset.moveAll = '1';
+      all.textContent = `move all ${below.length}`;
+      all.title = 'Move every step below into this branch';
+      all.addEventListener('click', () => {
+        picker.style.display = 'none';
+        moveAllIntoBranch(below.map((s) => s.id), step.id, key);
+      });
+      picker.appendChild(all);
+    }
+  }
 
   head.appendChild(label);
   head.appendChild(count);
