@@ -291,6 +291,13 @@ function conditionLabel(condition) {
   return `${neg}${target} is ${c.state || 'visible'}`;
 }
 
+/** Success chance (%) of a Gamble step: 0 never runs, 100 always, unset means 50. */
+function gambleChance(step) {
+  const n = Number(step && step.chance);
+  if (!Number.isFinite(n)) return 50;
+  return Math.max(0, Math.min(100, n));
+}
+
 /** Evaluate an If condition. URL checks run here; DOM checks run in the page. */
 async function evaluateCondition(condition, tabId) {
   if (!condition) return true;
@@ -324,6 +331,15 @@ async function runStep(step, depth) {
     const ok = await evaluateCondition(step.condition, tabId);
     emit({ type: 'BRANCH', result: ok, label: conditionLabel(step.condition) });
     await runSteps(ok ? step.then || [] : step.else || [], (depth || 0) + 1);
+    return;
+  }
+
+  if (step.action === 'gamble') {
+    // Rolled fresh every time the step is reached, so a loop gambles each pass.
+    const chance = gambleChance(step);
+    const won = Math.random() * 100 < chance;
+    emit({ type: 'GAMBLE', result: won, chance });
+    await runSteps(won ? step.then || [] : step.else || [], (depth || 0) + 1);
     return;
   }
 

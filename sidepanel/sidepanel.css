@@ -342,7 +342,8 @@ body {
   gap: 4px;
 }
 
-.condition {
+.condition,
+.gamble {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -505,6 +506,11 @@ body {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.num-suffix.tight {
+  min-width: 0;
+  margin-left: -3px;
 }
 
 .checkbox-inline {

@@ -16,7 +16,8 @@ const ACTIONS = {
   navigate: { label: 'Go to URL', pick: false },
   openTab: { label: 'Open tab', pick: false },
   switchTab: { label: 'Switch tab', pick: false },
-  browser: { label: 'Browser', pick: false }
+  browser: { label: 'Browser', pick: false },
+  gamble: { label: 'Gamble', pick: false }
 };
 
 /** Order + short labels for the "add step" menus (the top bar and each If branch). */
@@ -26,6 +27,7 @@ const ADD_MENU = [
   ['press', 'Key'],
   ['scan', 'Scan'],
   ['if', 'If'],
+  ['gamble', 'Gamble'],
   ['waitChange', 'Wait change'],
   ['wait', 'Wait'],
   ['scroll', 'Scroll'],
@@ -196,13 +198,17 @@ function branchOf(path) {
   return list;
 }
 
-/** Depth-first search for a step (walks into If branches). */
+/** Steps that own then/else branches the runner recurses into. */
+const BRANCH_ACTIONS = { if: true, gamble: true };
+const isBranchStep = (step) => !!BRANCH_ACTIONS[step && step.action];
+
+/** Depth-first search for a step (walks into If and Gamble branches). */
 function findStep(id, list) {
   const macro = currentMacro();
   const steps = list || (macro ? macro.steps : []);
   for (const step of steps) {
     if (step.id === id) return step;
-    if (step.action === 'if') {
+    if (isBranchStep(step)) {
       const inThen = findStep(id, step.then || []);
       if (inThen) return inThen;
       const inElse = findStep(id, step.else || []);
@@ -219,7 +225,7 @@ function findLocation(id, list) {
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (step.id === id) return { list: steps, index: i };
-    if (step.action === 'if') {
+    if (isBranchStep(step)) {
       const inThen = findLocation(id, step.then || []);
       if (inThen) return inThen;
       const inElse = findLocation(id, step.else || []);
@@ -229,12 +235,12 @@ function findLocation(id, list) {
   return null;
 }
 
-/** Total steps including those nested in If branches. */
+/** Total steps including those nested in If and Gamble branches. */
 function countSteps(list) {
   let n = 0;
   for (const step of list || []) {
     n += 1;
-    if (step.action === 'if') n += countSteps(step.then) + countSteps(step.else);
+    if (isBranchStep(step)) n += countSteps(step.then) + countSteps(step.else);
   }
   return n;
 }
@@ -466,6 +472,10 @@ function onAddStep(action, path) {
     addStep({ action: 'if', condition: defaultCondition(), then: [], else: [] }, branchPath);
     return;
   }
+  if (action === 'gamble') {
+    addStep({ action: 'gamble', chance: 50, then: [], else: [] }, branchPath);
+    return;
+  }
   if (action === 'waitChange') {
     addStep({ action: 'waitChange', watch: 'url', sinceLoop: true, timeout: 20000, interval: 300, optional: false }, branchPath);
     return;
@@ -575,6 +585,9 @@ function onRuntimeMessage(msg) {
 
   } else if (msg.type === 'BRANCH') {
     log(`${msg.result ? '✓ then' : '✗ else'} — ${msg.label}`, 'dim');
+
+  } else if (msg.type === 'GAMBLE') {
+    log(msg.result ? `✓ gamble won — ${msg.chance}%` : `✗ gamble lost — ${msg.chance}%`, 'dim');
 
   } else if (msg.type === 'RUN_PROGRESS') {
     const tag = msg.iteration ? `[${msg.iteration}${msg.iterations ? '/' + msg.iterations : ''}] ` : '';
@@ -835,27 +848,63 @@ function buildConditionEditor(step) {
   return wrap;
 }
 
+/** Clamp a Gamble chance to a whole 0-100; anything unusable means 50. */
+function normalizeChance(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 50;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+/** Header detail for a Gamble step, e.g. "30% chance". */
+function gambleSummary(step) {
+  return `${normalizeChance(step.chance)}% chance`;
+}
+
 /** A step's header text: a custom name replaces the action title, which stays visible as the detail. */
 function stepHeading(step) {
   const actionName = (ACTIONS[step.action] && ACTIONS[step.action].label) || step.action;
   const name = typeof step.label === 'string' ? step.label.trim() : '';
-  const detail = [name ? actionName : '', step.action === 'if' ? conditionSummary(step.condition) : '']
+  const detail = [
+    name ? actionName : '',
+    step.action === 'if' ? conditionSummary(step.condition) : '',
+    step.action === 'gamble' ? gambleSummary(step) : ''
+  ]
     .filter(Boolean)
     .join(' · ');
   return { title: name || actionName, detail, custom: !!name };
 }
 
+/** The Chance field of a Gamble step: how often its Succeeds branch runs. */
+function buildGambleEditor(step, applyHeading) {
+  const wrap = document.createElement('div');
+  wrap.className = 'gamble';
+
+  wrap.appendChild(
+    fieldRow(
+      'Chance',
+      numberField(
+        normalizeChance(step.chance),
+        '%',
+        (v) => {
+          updateStep(step.id, { chance: normalizeChance(v) });
+          applyHeading();
+        },
+        { min: 0, max: 100, step: 1 }
+      )
+    )
+  );
+
+  const hint = hintSpan('run the steps below this often — otherwise they are skipped');
+  hint.style.textTransform = 'none';
+  wrap.appendChild(hint);
+  return wrap;
+}
+
 /** The per-step Name field — renames the step without hiding what it actually does. */
-function buildNameRow(step, actionEl, subEl) {
+function buildNameRow(step, applyHeading) {
   const input = textInput(step.label || '', (v) => {
     updateStep(step.id, { label: v });
-    const heading = stepHeading(step);
-    actionEl.textContent = heading.title;
-    actionEl.title = heading.title;
-    actionEl.classList.toggle('custom', heading.custom);
-    subEl.textContent = heading.detail;
-    subEl.title = heading.detail;
-    subEl.style.display = heading.detail ? '' : 'none';
+    applyHeading();
   });
   input.placeholder = (ACTIONS[step.action] && ACTIONS[step.action].label) || step.action;
   return fieldRow('Name', input);
@@ -886,6 +935,17 @@ function buildStepRow(step, idx, total, path) {
   sub.title = heading.detail;
   sub.style.display = heading.detail ? '' : 'none';
 
+  /** Re-read the step and patch the header in place (no re-render, so focus survives). */
+  const applyHeading = () => {
+    const next = stepHeading(step);
+    action.textContent = next.title;
+    action.title = next.title;
+    action.classList.toggle('custom', next.custom);
+    sub.textContent = next.detail;
+    sub.title = next.detail;
+    sub.style.display = next.detail ? '' : 'none';
+  };
+
   const tools = document.createElement('div');
   tools.className = 'step-tools';
   tools.appendChild(toolBtn('↑', 'Move up', () => moveStep(step.id, -1), idx === 0));
@@ -901,10 +961,10 @@ function buildStepRow(step, idx, total, path) {
   const body = document.createElement('div');
   body.className = 'step-body';
 
-  if (step.action === 'if') {
-    body.appendChild(buildConditionEditor(step));
-    body.appendChild(buildBranch(step, path.concat([idx, 'then']), 'then', 'Then'));
-    body.appendChild(buildBranch(step, path.concat([idx, 'else']), 'else', 'Else'));
+  if (step.action === 'if' || step.action === 'gamble') {
+    body.appendChild(step.action === 'if' ? buildConditionEditor(step) : buildGambleEditor(step, applyHeading));
+    body.appendChild(buildBranch(step, path.concat([idx, 'then']), 'then', step.action === 'if' ? 'Then' : 'Succeeds'));
+    body.appendChild(buildBranch(step, path.concat([idx, 'else']), 'else', step.action === 'if' ? 'Else' : 'Fails'));
   } else if (step.action === 'waitChange') {
     const watch = step.watch || 'url';
     body.appendChild(
@@ -1092,7 +1152,7 @@ function buildStepRow(step, idx, total, path) {
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   }
 
-  body.appendChild(buildNameRow(step, action, sub));
+  body.appendChild(buildNameRow(step, applyHeading));
 
   row.appendChild(body);
   return row;
@@ -1243,6 +1303,7 @@ function numberField(value, unit, onChange, opts) {
   input.className = 'step-input';
   input.type = 'number';
   input.min = String(options.min == null ? 0 : options.min);
+  if (options.max != null) input.max = String(options.max);
   input.step = String(options.step == null ? 1 : options.step);
   input.value = String(value);
   input.addEventListener('input', () => onChange(Number(input.value) || 0));
@@ -1250,7 +1311,7 @@ function numberField(value, unit, onChange, opts) {
 
   if (unit) {
     const suffix = document.createElement('span');
-    suffix.className = 'num-suffix';
+    suffix.className = 'num-suffix' + (unit === '%' ? ' tight' : '');
     suffix.textContent = unit;
     wrap.appendChild(suffix);
   }
@@ -1398,8 +1459,9 @@ function sanitizeSteps(list) {
   return (Array.isArray(list) ? list : []).map((raw) => {
     const step = Object.assign({}, raw);
     step.id = typeof step.id === 'string' && step.id ? step.id : uid();
-    if (step.action === 'if') {
-      step.condition = step.condition || defaultCondition();
+    if (isBranchStep(step)) {
+      if (step.action === 'if') step.condition = step.condition || defaultCondition();
+      if (step.action === 'gamble') step.chance = normalizeChance(step.chance);
       step.then = sanitizeSteps(step.then);
       step.else = sanitizeSteps(step.else);
     }

@@ -18,9 +18,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Scan`
-  (wait for an element), `If` (branches), `Wait for change`, `Wait` (fixed or random range),
-  `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`,
-  `Browser` (browser-wide shortcuts).
+  (wait for an element), `If` (branches), `Gamble` (chance-based gate), `Wait for change`, `Wait`
+  (fixed or random range), `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`,
+  `Switch tab`, `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -38,6 +38,8 @@ under the cursor" approach — and turns it into durable selectors that survive 
   the list; the action it performs stays visible underneath, so `refill the cart` still reads as
   `Click`. Leave it blank and the step keeps its plain action name. Names are cosmetic — they are
   kept in exports too.
+- **Gamble** — a step that rolls the dice. Give it a chance and the steps you put inside it only
+  run that often; the rest of the macro carries on either way. See below.
 - **Export / import** — the `Backup` panel saves every macro (with its settings and nested steps)
   to a dated JSON file, and imports one back — either **replacing** everything or **merging** into
   what you already have.
@@ -179,6 +181,25 @@ Conditions:
 
 Tick **not** to invert any condition, and **case** to make text comparisons case-sensitive.
 The activity log reports which branch was taken, and nested steps are indented.
+
+## Gamble (chance)
+
+A **Gamble** step flips a weighted coin and only runs the steps you put inside it when the coin
+lands your way — so a macro can sometimes do nothing at all, and sometimes do the work. Put every
+step of a macro inside a Gamble and the whole run is a chance.
+
+- **Chance** is a percentage (`0`–`100`). `30` means the steps inside run about 3 times in 10.
+  `100` always runs them, `0` never does, and a step added fresh starts at `50`.
+- Its two branches are **Succeeds** (the coin landed your way) and **Fails** (it didn't). Anything
+  can go in either, including more Gambles, Ifs and other steps — nesting works to any depth.
+- **Leave Fails empty** for a plain "maybe skip this" gate: those steps simply don't happen and the
+  macro continues with the next step. Fill it in to have something else happen instead.
+- **Only the steps inside are affected.** Everything before and after a Gamble always runs, so you
+  can gate one fragile part of a macro rather than the whole thing.
+- The roll is **fresh every time the step is reached**, so in **Loop mode** each pass gambles
+  again — 30% over 10 loops is roughly 3 runs.
+
+The activity log reports each roll with its odds: `✓ gamble won — 30%` or `✗ gamble lost — 30%`.
 
 ## Elements that come and go (whack-a-mole)
 
