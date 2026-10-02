@@ -907,41 +907,32 @@ function buildStepRow(step, idx, total, path) {
 
     const changeTimeout = fieldRow(
       'Timeout',
-      secondsInput(step.timeout == null ? 20000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
+      secondsField(step.timeout == null ? 20000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
     );
-    changeTimeout.appendChild(hintSpan('s · 0 = forever'));
+    changeTimeout.appendChild(hintSpan('0 = forever'));
     body.appendChild(changeTimeout);
-    const changeEvery = fieldRow(
-      'Every',
-      secondsInput(step.interval == null ? 300 : step.interval, (ms) => updateStep(step.id, { interval: ms }))
+    body.appendChild(
+      fieldRow('Every', secondsField(step.interval == null ? 300 : step.interval, (ms) => updateStep(step.id, { interval: ms })))
     );
-    changeEvery.appendChild(hintSpan('s'));
-    body.appendChild(changeEvery);
     body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
   } else if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
-    const scanMsRow = fieldRow(
-      'Scan',
-      secondsInput(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms }))
+    body.appendChild(
+      fieldRow('Scan', secondsField(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms })))
     );
-    scanMsRow.appendChild(hintSpan('s'));
-    body.appendChild(scanMsRow);
   } else if (step.action === 'scan') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
     const scanTimeout = fieldRow(
       'Timeout',
-      secondsInput(step.timeout == null ? 10000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
+      secondsField(step.timeout == null ? 10000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
     );
-    scanTimeout.appendChild(hintSpan('s · 0 = forever'));
+    scanTimeout.appendChild(hintSpan('0 = forever'));
     body.appendChild(scanTimeout);
-    const scanEvery = fieldRow(
-      'Every',
-      secondsInput(step.interval == null ? 250 : step.interval, (ms) => updateStep(step.id, { interval: ms }))
+    body.appendChild(
+      fieldRow('Every', secondsField(step.interval == null ? 250 : step.interval, (ms) => updateStep(step.id, { interval: ms })))
     );
-    scanEvery.appendChild(hintSpan('s'));
-    body.appendChild(scanEvery);
     body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
   }
 
@@ -971,17 +962,17 @@ function buildStepRow(step, idx, total, path) {
 
     if (mode === 'range') {
       body.appendChild(
-        fieldRow('Min', secondsInput(step.min == null ? 500 : step.min, (ms) => updateStep(step.id, { min: ms })))
+        fieldRow('Min', secondsField(step.min == null ? 500 : step.min, (ms) => updateStep(step.id, { min: ms })))
       );
       body.appendChild(
-        fieldRow('Max', secondsInput(step.max == null ? 1500 : step.max, (ms) => updateStep(step.id, { max: ms })))
+        fieldRow('Max', secondsField(step.max == null ? 1500 : step.max, (ms) => updateStep(step.id, { max: ms })))
       );
-      const hint = hintSpan('s · random between Min and Max');
+      const hint = hintSpan('random between Min and Max');
       hint.style.textTransform = 'none';
       body.appendChild(hint);
     } else {
       body.appendChild(
-        fieldRow('Sec', secondsInput(step.ms || 0, (ms) => updateStep(step.id, { ms })))
+        fieldRow('Sec', secondsField(step.ms || 0, (ms) => updateStep(step.id, { ms })))
       );
     }
   } else if (step.action === 'scroll') {
@@ -1019,15 +1010,12 @@ function buildStepRow(step, idx, total, path) {
           )
         )
       );
-      body.appendChild(fieldRow('Px', numberInput(step.amount == null ? 600 : step.amount, (v) => updateStep(step.id, { amount: v }))));
+      body.appendChild(fieldRow('Px', numberField(step.amount == null ? 600 : step.amount, 'px', (v) => updateStep(step.id, { amount: v }))));
     }
 
-    const scrollTime = fieldRow(
-      'Time',
-      secondsInput(step.duration == null ? 0 : step.duration, (ms) => updateStep(step.id, { duration: ms }))
+    body.appendChild(
+      fieldRow('Time', secondsField(step.duration == null ? 0 : step.duration, (ms) => updateStep(step.id, { duration: ms })))
     );
-    scrollTime.appendChild(hintSpan('s'));
-    body.appendChild(scrollTime);
     if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
     body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
@@ -1216,16 +1204,33 @@ function secToMs(value) {
   return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0;
 }
 
-/** A duration input in seconds; onChange receives milliseconds. */
-function secondsInput(valueMs, onChangeMs) {
+/** A number input with its unit shown right after it, e.g. "5 s" or "600 px". */
+function numberField(value, unit, onChange, opts) {
+  const options = opts || {};
+  const wrap = document.createElement('div');
+  wrap.className = 'num-field';
+
   const input = document.createElement('input');
   input.className = 'step-input';
   input.type = 'number';
-  input.min = '0';
-  input.step = '0.1';
-  input.value = msToSec(valueMs);
-  input.addEventListener('input', () => onChangeMs(secToMs(input.value)));
-  return input;
+  input.min = String(options.min == null ? 0 : options.min);
+  input.step = String(options.step == null ? 1 : options.step);
+  input.value = String(value);
+  input.addEventListener('input', () => onChange(Number(input.value) || 0));
+  wrap.appendChild(input);
+
+  if (unit) {
+    const suffix = document.createElement('span');
+    suffix.className = 'num-suffix';
+    suffix.textContent = unit;
+    wrap.appendChild(suffix);
+  }
+  return wrap;
+}
+
+/** A duration field: edited in seconds, reported in milliseconds. */
+function secondsField(valueMs, onChangeMs, unit) {
+  return numberField(msToSec(valueMs), unit || 's', (seconds) => onChangeMs(secToMs(seconds)), { min: 0, step: 0.1 });
 }
 
 function fieldRow(labelText, input) {
@@ -1281,17 +1286,6 @@ function selectInput(options, value, onChange) {
   }
   select.addEventListener('change', () => onChange(select.value));
   return select;
-}
-
-function numberInput(value, onChange) {
-  const input = document.createElement('input');
-  input.className = 'step-input';
-  input.type = 'number';
-  input.min = '0';
-  input.step = '100';
-  input.value = String(value);
-  input.addEventListener('input', () => onChange(Number(input.value) || 0));
-  return input;
 }
 
 function renderStatus() {

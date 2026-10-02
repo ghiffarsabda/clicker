@@ -1,4 +1,4 @@
-# Clicker — Chrome Macro Builder
+# Clicker — Macrobat
 
 Build custom macros that automate repetitive tasks in the browser. Pick the elements you want
 to act on directly on the page, chain them into steps, and replay the macro on demand.
@@ -136,8 +136,10 @@ The **Wait** step pauses the macro, in one of two modes:
 Either order works for Min/Max (they're sorted); Min alone is a fixed pause, Max alone spans
 `0…Max`. A long wait can be interrupted with **Stop**.
 
-> **Units**: every time field in the panel is in **seconds** (decimals allowed, e.g. `0.25`).
-> Values are stored internally in milliseconds, so existing macros keep working.
+> **Units**: every number field shows its unit right next to the value — `s` for seconds,
+> `px` for scroll distance, `×` for loop count (e.g. `5 s`, `600 px`, `3 ×`). Times are edited in
+> **seconds** (decimals allowed, e.g. `0.25`) and stored internally in milliseconds, so existing
+> macros keep working.
 
 ## Waiting for the page to change
 
