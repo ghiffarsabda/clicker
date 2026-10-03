@@ -6,9 +6,11 @@
 const RESTRICTED = /^(chrome|edge|about|chrome-extension|devtools|view-source|data):/i;
 const RESTRICTED_HOST = /^https:\/\/chromewebstore\.google\.com/i;
 
-// How long to wait for a new tab the page opened itself to be announced: a link
-// that targets a new context gets a real grace, any other click just enough to
-// catch a fast window.open(). Both end early the moment the tab shows up.
+// How long to wait for a new tab the page opened itself to be announced, after a
+// click that landed on a link: one that targets a new context gets a real grace,
+// a same-context link just enough to catch a fast window.open(). Both end early
+// the moment the tab shows up. Ordinary (non-link) clicks don't wait at all — see
+// runSteps — so a stray tab the page opens on its own can't be adopted.
 const NEW_TAB_GRACE = 1200;
 const CLICK_GRACE = 200;
 
@@ -329,12 +331,13 @@ async function runSteps(steps, depth) {
     activeRun.stepStartedAt = Date.now();
     const res = await runStep(step, depth || 0);
 
-    // Catch a tab this step just opened, so the following step can use it. A tab
-    // the page opens itself can be announced a beat after the click handler
-    // returns, so give a click a short grace to show up — otherwise the next step
-    // fires on the old page. A link that targets a new context is worth waiting
-    // longer for, so its fallback doesn't race the page and open a duplicate.
-    const grace = expectNewTab(step, res) ? NEW_TAB_GRACE : step.action === 'click' ? CLICK_GRACE : 0;
+    // Catch a tab this step just opened, so the following step can use it. Only a
+    // click that landed on a link can be expected to open a tab — waiting after an
+    // ordinary click lets a stray tab the page opens on its own (a popup/ad) be
+    // adopted instead of the page we're on. A link that targets a new context gets
+    // the longer grace, so its fallback doesn't race the page and open a duplicate.
+    const opensTab = step.action === 'click' && res && res.link;
+    const grace = !opensTab ? 0 : expectNewTab(step, res) ? NEW_TAB_GRACE : CLICK_GRACE;
     const adopted = activeRun.follow ? await maybeFollowNewTab(grace) : null;
     if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
       await openLinkFallback(res.link, res.urlBefore);
