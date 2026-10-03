@@ -736,7 +736,11 @@ function onRuntimeMessage(msg) {
     log(msg.text, 'dim');
 
   } else if (msg.type === 'TAB_CHANGED') {
-    log(`Tab → ${hostOf(msg.url)}`, 'ok');
+    const to = hostOf(msg.url);
+    if (msg.reason === 'follow') log(`Followed new tab → ${to}`, 'ok');
+    else if (msg.reason === 'open') log(`Opened new tab → ${to}`, 'ok');
+    else if (msg.from) log(`Switched FROM ${hostOf(msg.from)} TO ${to}`, 'ok');
+    else log(`Switched TO ${to}`, 'ok');
 
   } else if (msg.type === 'RUN_LOOP') {
     log(`Loop ${msg.iteration}${msg.total ? ' of ' + msg.total : ''}`, 'dim');
@@ -756,7 +760,8 @@ function onRuntimeMessage(msg) {
     const where = msg.url ? ` · ${hostOf(msg.url)}` : '';
     const indent = msg.depth ? '    '.repeat(msg.depth) : '';
     const label = msg.action === 'browser' && msg.command ? BROWSER_LABELS[msg.command] : ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action;
-    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${where}`);
+    const detail = msg.label ? ` "${msg.label}"` : '';
+    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${detail}${where}`);
 
   } else if (msg.type === 'RUN_STATUS') {
     if (msg.state === 'running') {
@@ -1650,16 +1655,35 @@ function hostOf(url) {
   }
 }
 
+/** One rendered activity-log line. */
+function buildLogLine(entry) {
+  const line = document.createElement('div');
+  line.className = 'log-line' + (entry.kind ? ' ' + entry.kind : '');
+  const time = document.createElement('span');
+  time.className = 't';
+  time.textContent = entry.time;
+  line.appendChild(time);
+  line.appendChild(document.createTextNode(entry.text));
+  return line;
+}
+
 function log(text, kind) {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
-  state.logs.push({
+  const entry = {
     time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
     text,
     kind: kind || ''
-  });
-  if (state.logs.length > 300) state.logs.shift();
-  renderLog();
+  };
+  state.logs.push(entry);
+  // Append just the new line rather than rebuilding the whole list — a busy loop
+  // emits hundreds of entries, and the full innerHTML rebuild was the lag.
+  if (state.logs.length > 300) {
+    state.logs.shift();
+    if (ui.log.firstElementChild) ui.log.removeChild(ui.log.firstElementChild);
+  }
+  ui.log.appendChild(buildLogLine(entry));
+  ui.log.scrollTop = ui.log.scrollHeight;
   updateSummaries();
 }
 
@@ -1803,17 +1827,6 @@ async function applyImport(mode) {
 
 function renderLog() {
   ui.log.innerHTML = '';
-  for (const entry of state.logs) {
-    const line = document.createElement('div');
-    line.className = 'log-line' + (entry.kind ? ' ' + entry.kind : '');
-
-    const time = document.createElement('span');
-    time.className = 't';
-    time.textContent = entry.time;
-
-    line.appendChild(time);
-    line.appendChild(document.createTextNode(entry.text));
-    ui.log.appendChild(line);
-  }
+  for (const entry of state.logs) ui.log.appendChild(buildLogLine(entry));
   ui.log.scrollTop = ui.log.scrollHeight;
 }

@@ -327,6 +327,7 @@ async function runSteps(steps, depth) {
       depth: depth || 0,
       action: step.action,
       command: step.action === 'browser' ? step.command : undefined,
+      label: step.label || (step.target && (step.target.label || step.target.selector)) || '',
       url: activeRun.tabUrl,
       iteration: activeRun.looping ? activeRun.iteration : null,
       iterations: activeRun.loopTotal
@@ -433,15 +434,16 @@ async function runStep(step, depth) {
     await waitForTabComplete(tabId, before);
     await sleep(250);
     await ensureAgent(tabId);
+    activeRun.tabUrl = await currentUrl(tabId);
     return;
   }
 
   if (step.action === 'openTab') {
     if (!step.url) throw new Error('Open tab step has no URL');
     const created = await chrome.tabs.create({ url: step.url, active: step.activate !== false });
-    await waitForNewTabUrl(created.id);
+    const loaded = await waitForNewTabUrl(created.id);
     await ensureAgent(created.id);
-    adoptTab(created.id);
+    adoptTab(created.id, { reason: 'open', tab: loaded });
     return;
   }
 
@@ -449,7 +451,7 @@ async function runStep(step, depth) {
     const target = await resolveSwitchTarget(step);
     if (!target) throw new Error('No matching tab to switch to');
     if (step.activate !== false) await chrome.tabs.update(target.id, { active: true }).catch(() => {});
-    adoptTab(target.id);
+    adoptTab(target.id, { reason: 'switch', tab: target });
     await ensureAgent(target.id);
     return;
   }
@@ -500,9 +502,9 @@ async function openLinkFallback(link, urlBefore) {
 
   if (link.target === '_blank') {
     const created = await chrome.tabs.create({ url: link.href, active: true });
-    await waitForNewTabUrl(created.id).catch(() => {});
+    const loaded = await waitForNewTabUrl(created.id).catch(() => null);
     await ensureAgent(created.id).catch(() => {});
-    adoptTab(created.id);
+    adoptTab(created.id, { reason: 'open', tab: loaded || created });
     return;
   }
 
@@ -510,6 +512,7 @@ async function openLinkFallback(link, urlBefore) {
   await waitForTabComplete(activeRun.tabId, urlBefore || '');
   await sleep(250);
   await ensureAgent(activeRun.tabId);
+  activeRun.tabUrl = await currentUrl(activeRun.tabId);
 }
 
 function stopRun() {
@@ -619,22 +622,29 @@ function markConsumed(tabId) {
   if (entry) entry.consumed = true;
 }
 
-/** Point the run at a different tab and tell the panel about it. */
-function adoptTab(tabId) {
+/**
+ * Point the run at a different tab and tell the panel about it. `opts.reason`
+ * labels the move in the activity log ('switch' | 'open' | 'follow'); passing the
+ * Tab in `opts.tab` emits that line straight away, in order, instead of after an
+ * extra async round-trip (which is what made the log look like it lagged).
+ */
+function adoptTab(tabId, opts = {}) {
   if (tabId != null) markConsumed(tabId);
   if (!activeRun || activeRun.tabId === tabId) return;
+  const from = activeRun.tabUrl || '';
   activeRun.tabId = tabId;
   activeRun.blockFollow = true; // the tab we just moved to gets the next step to itself
   activeRun.history.push(tabId);
   if (activeRun.history.length > 20) activeRun.history.shift();
-  chrome.tabs
-    .get(tabId)
-    .then((t) => {
-      activeRun.windowId = t.windowId; // the new tab may live in another window
-      activeRun.tabUrl = t.url || activeRun.tabUrl;
-      emit({ type: 'TAB_CHANGED', tabId, url: t.url, title: t.title });
-    })
-    .catch(() => {});
+
+  const report = (tab) => {
+    if (!activeRun) return;
+    activeRun.windowId = tab.windowId; // the new tab may live in another window
+    activeRun.tabUrl = tab.url || activeRun.tabUrl;
+    emit({ type: 'TAB_CHANGED', tabId, url: tab.url, title: tab.title, from, reason: opts.reason || 'switch' });
+  };
+  if (opts.tab) report(opts.tab);
+  else chrome.tabs.get(tabId).then(report).catch(() => {});
 }
 
 /** Wait for a freshly opened tab to finish loading a real page. */
@@ -703,7 +713,7 @@ async function maybeFollowNewTab(waitMs = 0) {
       const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
       if (loaded && !isRestricted(loaded)) {
         await ensureAgent(pick.id).catch(() => {});
-        adoptTab(pick.id);
+        adoptTab(pick.id, { reason: 'follow', tab: loaded });
         return pick.id;
       }
     }
@@ -771,7 +781,7 @@ async function runBrowserCommand(step) {
       const created = await chrome.tabs.create({ url, active: activate });
       markConsumed(created.id);
       if (activate) {
-        adoptTab(created.id);
+        adoptTab(created.id, { reason: 'open', tab: created });
         await ensureAgent(created.id).catch(() => {});
       }
       return;
@@ -783,7 +793,7 @@ async function runBrowserCommand(step) {
       await sleep(200);
       const [next] = await chrome.tabs.query({ active: true, windowId });
       if (!next) throw new Error('Closed the last tab — nothing left to run on');
-      adoptTab(next.id);
+      adoptTab(next.id, { reason: 'switch', tab: next });
       await ensureAgent(next.id).catch(() => {});
       return;
     }
@@ -811,7 +821,7 @@ async function runBrowserCommand(step) {
       const restored = session && session.tab;
       if (restored) {
         markConsumed(restored.id);
-        adoptTab(restored.id);
+        adoptTab(restored.id, { reason: 'open', tab: restored });
         await ensureAgent(restored.id).catch(() => {});
       }
       return;
@@ -824,7 +834,7 @@ async function runBrowserCommand(step) {
       const idx = tabs.findIndex((t) => t.id === tabId);
       const target = tabs[(idx + (command === 'nextTab' ? 1 : -1) + tabs.length) % tabs.length];
       await chrome.tabs.update(target.id, { active: true }).catch(() => {});
-      adoptTab(target.id);
+      adoptTab(target.id, { reason: 'switch', tab: target });
       await ensureAgent(target.id).catch(() => {});
       return;
     }
@@ -834,7 +844,7 @@ async function runBrowserCommand(step) {
       if (!dup) return;
       markConsumed(dup.id);
       if (activate) {
-        adoptTab(dup.id);
+        adoptTab(dup.id, { reason: 'open', tab: dup });
         await ensureAgent(dup.id).catch(() => {});
       }
       return;
@@ -861,6 +871,7 @@ async function runBrowserCommand(step) {
       await sleep(400);
       await waitForTabComplete(tabId, '').catch(() => {});
       await ensureAgent(tabId).catch(() => {});
+      activeRun.tabUrl = await currentUrl(tabId);
       return;
     }
 
@@ -870,7 +881,7 @@ async function runBrowserCommand(step) {
       const tab = (win.tabs && win.tabs[0]) || (await chrome.tabs.query({ windowId: win.id }))[0];
       if (!tab) return;
       markConsumed(tab.id);
-      adoptTab(tab.id);
+      adoptTab(tab.id, { reason: 'open', tab });
       await ensureAgent(tab.id).catch(() => {});
       return;
     }
@@ -880,7 +891,7 @@ async function runBrowserCommand(step) {
       await sleep(250);
       const [next] = await chrome.tabs.query({ active: true });
       if (!next) throw new Error('Closed the last window — nothing left to run on');
-      adoptTab(next.id);
+      adoptTab(next.id, { reason: 'switch', tab: next });
       await ensureAgent(next.id).catch(() => {});
       return;
     }
