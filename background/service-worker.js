@@ -448,7 +448,7 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'waitChange') {
-    await runWaitChange(step, tabId);
+    await runWaitChange(step, tabId, depth);
     return;
   }
 
@@ -833,13 +833,18 @@ async function readTargetText(tabId, step) {
  * With `sinceLoop` the baseline is the value from the previous loop iteration,
  * which is how you say "if it's still the same page as last time, wait".
  */
-async function runWaitChange(step, tabId) {
+async function runWaitChange(step, tabId, depth) {
   const timeout = timeoutValue(step.timeout, 20000);
   const indefinite = timeout <= 0; // 0 = wait until it changes (or Stop)
   const every = Math.max(100, Number(step.interval) || 300);
   const watchUrl = (step.watch || 'url') === 'url';
+  const inner = step.then || [];
 
-  const read = () => (watchUrl ? currentUrl(tabId) : readTargetText(tabId, step));
+  // Watch the tab the run is actually on — a "while waiting" step may move it.
+  const read = () => {
+    const id = activeRun ? activeRun.tabId : tabId;
+    return watchUrl ? currentUrl(id) : readTargetText(id, step);
+  };
 
   const baseline =
     watchUrl && step.sinceLoop && activeRun.loopMemory.url ? activeRun.loopMemory.url : await read();
@@ -849,6 +854,13 @@ async function runWaitChange(step, tabId) {
     if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
 
     if ((await read()) !== baseline) return;
+
+    // "While waiting" steps: run them each pass and re-check, since they may be
+    // the very thing that flips the URL (a click that navigates) or the text.
+    if (inner.length) {
+      await runSteps(inner, (depth || 0) + 1);
+      if ((await read()) !== baseline) return;
+    }
 
     if (indefinite) {
       await sleep(every);
