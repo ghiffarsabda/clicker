@@ -773,14 +773,13 @@ async function goToOpenedTab(beforeIds, waitMs) {
 
   for (;;) {
     const tabs = await chrome.tabs.query({});
-    const fresh = tabs.filter(
-      (t) => !beforeIds.has(t.id) && t.id !== activeRun.tabId && !isRestricted(t)
-    );
+    // Only a tab THIS click opened — its opener is the tab we clicked on. Never pick
+    // "the first new tab", which could be an ad/chat widget the page spawned, and
+    // would silently run the rest of the macro on the wrong page.
     const pick =
-      fresh.find((t) => t.openerTabId === activeRun.tabId) ||
-      fresh.find((t) => t.windowId === activeRun.windowId) ||
-      fresh[0] ||
-      null;
+      tabs.find(
+        (t) => !beforeIds.has(t.id) && t.openerTabId === activeRun.tabId && !isRestricted(t)
+      ) || null;
     if (pick) {
       const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
       if (loaded && !isRestricted(loaded)) {
