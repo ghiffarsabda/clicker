@@ -341,7 +341,15 @@
     const box = overlay.querySelector('#clicker-pick-box');
     const label = overlay.querySelector('#clicker-pick-label');
     overlay.querySelector('#clicker-pick-mode').textContent =
-      mode === 'type' ? 'type into' : mode === 'press' ? 'press a key on' : mode === 'scroll' ? 'scroll to' : 'click';
+      mode === 'type'
+        ? 'type into'
+        : mode === 'press'
+          ? 'press a key on'
+          : mode === 'scroll'
+            ? 'scroll to'
+            : mode === 'hover'
+              ? 'hover over'
+              : 'click';
 
     const onMove = (e) => {
       const el = elementAtPoint(e.clientX, e.clientY);
@@ -439,6 +447,32 @@
     } catch (_) {}
     el.dispatchEvent(new MouseEvent('mouseup', opts));
     el.dispatchEvent(new MouseEvent('click', opts));
+  }
+
+  /**
+   * Move the (synthetic) pointer onto an element. Sites that reveal a menu on
+   * mouseover/mouseenter react to this; CSS `:hover` styles do not, because a
+   * page cannot be told where the real cursor is.
+   */
+  function performHover(el) {
+    const r = el.getBoundingClientRect();
+    const at = {
+      view: window,
+      cancelable: true,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2
+    };
+    const over = Object.assign({ bubbles: true }, at);
+    const enter = Object.assign({ bubbles: false }, at);
+    try {
+      el.dispatchEvent(new PointerEvent('pointerover', Object.assign({ pointerId: 1, isPrimary: true }, over)));
+    } catch (_) {}
+    try {
+      el.dispatchEvent(new PointerEvent('pointerenter', Object.assign({ pointerId: 1, isPrimary: true }, enter)));
+    } catch (_) {}
+    el.dispatchEvent(new MouseEvent('mouseover', over));
+    el.dispatchEvent(new MouseEvent('mouseenter', enter));
+    el.dispatchEvent(new MouseEvent('mousemove', over));
   }
 
   /** Set value through the native setter so React/Vue controlled inputs notice it. */
@@ -889,6 +923,11 @@
         break;
       case 'press':
         performPress(el, step.key || 'Enter');
+        break;
+      case 'hover':
+        performHover(el);
+        // Hold the pointer there — Stop cuts the wait short.
+        await pause(Math.max(0, Number(step.ms) || 0));
         break;
       default:
         throw new Error('Unknown action: ' + step.action);

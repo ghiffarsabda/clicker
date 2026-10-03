@@ -8,6 +8,7 @@ const ACTIONS = {
   click: { label: 'Click', pick: true },
   type: { label: 'Type', pick: true },
   press: { label: 'Key press', pick: true },
+  hover: { label: 'Hover', pick: true },
   scan: { label: 'Scan', pick: true },
   if: { label: 'If', pick: false },
   waitChange: { label: 'Wait for change', pick: false },
@@ -25,6 +26,7 @@ const ADD_MENU = [
   ['click', 'Click'],
   ['type', 'Type'],
   ['press', 'Key'],
+  ['hover', 'Hover'],
   ['scan', 'Scan'],
   ['if', 'If'],
   ['gamble', 'Gamble'],
@@ -707,6 +709,7 @@ function onRuntimeMessage(msg) {
       const base = { action, target: msg.target };
       if (action === 'type') base.value = '';
       if (action === 'press') base.key = 'Enter';
+      if (action === 'hover') base.ms = 1000;
       if (action === 'scan') {
         base.timeout = 10000;
         base.interval = 250;
@@ -1203,12 +1206,14 @@ function buildStepRow(step, idx, total, path) {
       fieldRow('Every', secondsField(step.interval == null ? 300 : step.interval, (ms) => updateStep(step.id, { interval: ms })))
     );
     body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
-  } else if (step.action === 'click' || step.action === 'type' || step.action === 'press') {
+  } else if (step.action === 'click' || step.action === 'type' || step.action === 'press' || step.action === 'hover') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
-    body.appendChild(
-      fieldRow('Scan', secondsField(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms })))
-    );
+    if (step.action !== 'hover') {
+      body.appendChild(
+        fieldRow('Scan', secondsField(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms })))
+      );
+    }
   } else if (step.action === 'scan') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
@@ -1228,6 +1233,10 @@ function buildStepRow(step, idx, total, path) {
     body.appendChild(fieldRow('Value', textInput(step.value || '', (v) => updateStep(step.id, { value: v }))));
   } else if (step.action === 'press') {
     body.appendChild(fieldRow('Key', textInput(step.key || 'Enter', (v) => updateStep(step.id, { key: v }))));
+  } else if (step.action === 'hover') {
+    body.appendChild(
+      fieldRow('Hold', secondsField(step.ms == null ? 1000 : step.ms, (ms) => updateStep(step.id, { ms })))
+    );
   } else if (step.action === 'wait') {
     const mode = step.mode === 'range' ? 'range' : 'fixed';
     body.appendChild(

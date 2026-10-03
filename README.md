@@ -19,10 +19,10 @@ under the cursor" approach — and turns it into durable selectors that survive 
   matching as long as the element is there. Text matching is opt-in per step (`also match by
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
-- **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Scan`
-  (wait for an element), `If` (branches), `Gamble` (chance-based gate), `Wait for change`, `Wait`
-  (fixed or random range), `Scroll` (human-like), `Go to URL` (navigates in place), `Open tab`,
-  `Switch tab`, `Browser` (browser-wide shortcuts).
+- **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Hover` (move
+  onto an element and hold), `Scan` (wait for an element), `If` (branches), `Gamble` (chance-based
+  gate), `Wait for change`, `Wait` (fixed or random range), `Scroll` (human-like), `Go to URL`
+  (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -93,6 +93,21 @@ straight to the next one, starting again from step 1 — so a `Scan → Click` p
 finds no button simply keeps looking. The run ends when the loop count is reached or you press
 **Stop**. Combine with **Auto mode** for continuous background automation on a matching page —
 keep the panel open so the activity log and Stop are at hand.
+
+## Hover step
+
+The **Hover** step moves the pointer onto a picked element and holds it there for **Hold** seconds
+(default 1 s) before carrying on — for menus, submenus and tooltips that only appear on hover.
+
+- **Hold** — how long to stay on the element, in seconds. `0` just fires the hover and moves on.
+- Pick the element to hover the same way as a click (structure-based targeting and the
+  `also match by text` toggle both apply).
+
+It dispatches `pointerover`/`pointerenter`, `mouseover`/`mouseenter` and `mousemove` on the
+element, which is what JavaScript menus listen for. Pure CSS `:hover` styling does **not** trigger,
+because a page cannot be told where the real cursor is. The hover is left in place afterwards (no
+mouse-out is sent), so a revealed menu stays open for the next step, and **Stop** cuts the hold
+short.
 
 ## Scroll step
 
