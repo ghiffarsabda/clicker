@@ -13,9 +13,12 @@ const RESTRICTED_HOST = /^https:\/\/chromewebstore\.google\.com/i;
 // runSteps — so a stray tab the page opens on its own can't be adopted.
 const NEW_TAB_GRACE = 1200;
 const CLICK_GRACE = 200;
-// A tab we've been trying to follow that never becomes a usable page is abandoned
-// after this long, so a broken popup can't stall every step forever.
-const NEW_TAB_GIVEUP = 10000;
+// How long to wait for a followed tab to finish loading before moving on — the next
+// step must run on the new page, and pages take longer than the appearance grace.
+const NEW_TAB_READY = 10000;
+// A tab that still isn't a real page after this long is abandoned, so a broken popup
+// can't stall the run forever.
+const NEW_TAB_GIVEUP = 15000;
 
 let activeRun = null; // { cancelled, tabId, macroId }
 
@@ -341,7 +344,7 @@ async function runSteps(steps, depth) {
 
     // A previous step may have opened a tab after a delay — move onto it first,
     // unless we just deliberately moved to a tab (a switch/open) and owe it a step.
-    if (activeRun.follow && !activeRun.blockFollow) await maybeFollowNewTab(NEW_TAB_GRACE, true);
+    if (activeRun.follow && !activeRun.blockFollow) await maybeFollowNewTab();
     activeRun.blockFollow = false;
 
     emit({
@@ -480,7 +483,7 @@ async function runStep(step, depth) {
       // navigated away or closed): go back there by navigating instead of aborting
       // the pass with "no matching tab".
       if (String(step.url || '').includes('ThisURL') && step.urlOp !== 'isnot' && activeRun.thisURL) {
-        emit({ type: 'NOTE', text: 'No tab at ThisURL — navigating back to it instead.' });
+        emit({ type: 'NOTE', text: 'Returned to ThisURL (no tab had it open — loaded it).' });
         const before = await currentUrl(tabId);
         await chrome.tabs.update(tabId, { url: activeRun.thisURL });
         await waitForTabComplete(tabId, before).catch(() => {});
@@ -750,37 +753,33 @@ function followCandidate() {
  *
  * `waitMs` is a grace for a tab the page opens itself: the browser announces it a
  * beat after the click handler returns, so a caller that expects a tab passes a
- * grace instead of a single look — otherwise the next step runs on the old page.
- * `requireExisting` is for the check at the top of a step: don't idle waiting for a
- * tab to appear, but if one is already pending, wait for it to become ready so the
- * step still runs on it (closing the gap where a slow tab got skipped).
+ * grace instead of a single look.
  *
- * A picked tab is only marked consumed once it is actually adopted — a tab that is
- * still loading is left for the next check rather than dropped (the follow gap).
+ * Once a candidate exists we wait for it to finish LOADING (up to NEW_TAB_READY)
+ * and adopt it, so the next step runs on the new page rather than the old one. A
+ * picked tab is only marked consumed once it is actually adopted, so a tab that is
+ * still loading is retried by the next check instead of being dropped.
  * @returns the tab id that was adopted, or null.
  */
-async function maybeFollowNewTab(waitMs = 0, requireExisting = false) {
+async function maybeFollowNewTab(waitMs = 0) {
   const deadline = Date.now() + waitMs;
 
   for (;;) {
     if (!activeRun || !activeRun.follow) return null;
 
     const pick = followCandidate();
-    if (!pick) {
-      if (requireExisting) return null; // nothing pending — don't idle
-    } else if (Date.now() - (pick.time || 0) > NEW_TAB_GIVEUP) {
-      markConsumed(pick.id); // never became a real page — stop chasing it
-    } else {
-      const tab = await chrome.tabs.get(pick.id).catch(() => null);
-      if (!tab) {
-        markConsumed(pick.id); // the tab is gone
-      } else if (tab.status === 'complete' && tab.url && !isRestricted(tab)) {
-        markConsumed(pick.id);
-        await ensureAgent(pick.id).catch(() => {});
-        adoptTab(pick.id, { reason: 'follow', tab });
-        return pick.id;
+    if (pick) {
+      if (Date.now() - (pick.time || 0) > NEW_TAB_GIVEUP) {
+        markConsumed(pick.id); // never became a real page — stop chasing it
+      } else {
+        const loaded = await waitForNewTabUrl(pick.id, NEW_TAB_READY).catch(() => null);
+        if (loaded && !isRestricted(loaded)) {
+          markConsumed(pick.id);
+          await ensureAgent(pick.id).catch(() => {});
+          adoptTab(pick.id, { reason: 'follow', tab: loaded });
+          return pick.id;
+        }
       }
-      // still loading: leave it unconsumed and keep polling until the deadline
     }
 
     if (Date.now() >= deadline) return null;
