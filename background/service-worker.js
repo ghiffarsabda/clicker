@@ -206,13 +206,8 @@ async function cancelPicker() {
 
 async function runMacro(macroId, opts = {}) {
   if (activeRun) {
-    // Recover from a wedged run (its tab is gone) instead of refusing forever.
-    const alive = await chrome.tabs.get(activeRun.tabId).catch(() => null);
-    if (alive) {
-      if (!opts.auto) emit({ type: 'RUN_STATUS', state: 'error', error: 'A macro is already running' });
-      return;
-    }
-    activeRun = null;
+    if (!opts.auto) emit({ type: 'RUN_STATUS', state: 'error', error: 'A macro is already running' });
+    return;
   }
 
   const { macros = [] } = await chrome.storage.local.get('macros');
@@ -243,8 +238,8 @@ async function runMacro(macroId, opts = {}) {
     follow: macro.followTabs !== false,
     blockFollow: false,
     startedAt: Date.now(),
+    stepStartedAt: Date.now(),
     tabUrl: tab.url || '',
-    thisURL: tab.url || '', // the "ThisURL" token: the page the run started on
     loopMemory: {}
   };
 
@@ -270,11 +265,6 @@ async function runMacro(macroId, opts = {}) {
 
     for (let iteration = 1; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
-      // Its tab closing used to spin error passes forever ("no tab with id"). Stop
-      // cleanly so the worker is freed and Run works again.
-      if (!(await chrome.tabs.get(activeRun.tabId).catch(() => null))) {
-        throw new Error('The tab was closed — run stopped.');
-      }
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
       activeRun.iteration = iteration;
       activeRun.loopTotal = totalLabel;
@@ -283,9 +273,7 @@ async function runMacro(macroId, opts = {}) {
         await runSteps(macro.steps, 0);
       } catch (e) {
         const error = String((e && e.message) || e);
-        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user|tab was closed/.test(error)) throw e;
-        // A gone tab is fatal — retrying the pass can never succeed.
-        if (/no tab with id/i.test(error)) throw new Error('The tab was closed — run stopped.');
+        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user/.test(error)) throw e;
         failedPasses++;
         emit({ type: 'RUN_LOOP_ERROR', error, iteration, total: totalLabel });
       }
@@ -340,17 +328,12 @@ async function runSteps(steps, depth) {
       action: step.action,
       command: step.action === 'browser' ? step.command : undefined,
       label: step.label || (step.target && (step.target.label || step.target.selector)) || '',
-      tabId: activeRun.tabId,
       url: activeRun.tabUrl,
       iteration: activeRun.looping ? activeRun.iteration : null,
       iterations: activeRun.loopTotal
     });
 
-    // Snapshot existing tabs before a "go to tab it opens" click, so it can only
-    // ever land on a tab this click created.
-    const goTo = step.action === 'click' && step.goTo === true;
-    const beforeIds = goTo ? new Set((await chrome.tabs.query({})).map((t) => t.id)) : null;
-
+    activeRun.stepStartedAt = Date.now();
     const res = await runStep(step, depth || 0);
 
     // Catch a tab this step just opened, so the following step can use it. Only a
@@ -359,19 +342,9 @@ async function runSteps(steps, depth) {
     // adopted instead of the page we're on. A link that targets a new context gets
     // the longer grace, so its fallback doesn't race the page and open a duplicate.
     const opensTab = step.action === 'click' && res && res.link;
-    const grace = !opensTab
-      ? goTo
-        ? NEW_TAB_GRACE
-        : 0
-      : expectNewTab(step, res)
-        ? NEW_TAB_GRACE
-        : CLICK_GRACE;
-
-    let adopted = null;
-    if (goTo) adopted = await goToOpenedTab(beforeIds, grace);
-    else if (activeRun.follow && !activeRun.blockFollow) adopted = await maybeFollowNewTab(grace);
-
-    if (step.action === 'click' && !adopted && res && res.link && (activeRun.follow || goTo)) {
+    const grace = !opensTab ? 0 : expectNewTab(step, res) ? NEW_TAB_GRACE : CLICK_GRACE;
+    const adopted = activeRun.follow && !activeRun.blockFollow ? await maybeFollowNewTab(grace) : null;
+    if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
       await openLinkFallback(res.link, res.urlBefore);
     }
   }
@@ -452,13 +425,12 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'navigate') {
-    const url = withThisURL(step.url);
-    if (!url) throw new Error('Navigate step has no URL');
+    if (!step.url) throw new Error('Navigate step has no URL');
     const before = await chrome.tabs
       .get(tabId)
       .then((t) => t.url || '')
       .catch(() => '');
-    await chrome.tabs.update(tabId, { url });
+    await chrome.tabs.update(tabId, { url: step.url });
     await waitForTabComplete(tabId, before);
     await sleep(250);
     await ensureAgent(tabId);
@@ -467,9 +439,8 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'openTab') {
-    const url = withThisURL(step.url);
-    if (!url) throw new Error('Open tab step has no URL');
-    const created = await chrome.tabs.create({ url, active: step.activate !== false, windowId: activeRun.windowId });
+    if (!step.url) throw new Error('Open tab step has no URL');
+    const created = await chrome.tabs.create({ url: step.url, active: step.activate !== false });
     const loaded = await waitForNewTabUrl(created.id);
     await ensureAgent(created.id);
     adoptTab(created.id, { reason: 'open', tab: loaded });
@@ -530,7 +501,7 @@ async function openLinkFallback(link, urlBefore) {
   emit({ type: 'NOTE', text: `Opened ${link.href} directly (the page's own popup was blocked)` });
 
   if (link.target === '_blank') {
-    const created = await chrome.tabs.create({ url: link.href, active: true, windowId: activeRun.windowId });
+    const created = await chrome.tabs.create({ url: link.href, active: true });
     const loaded = await waitForNewTabUrl(created.id).catch(() => null);
     await ensureAgent(created.id).catch(() => {});
     adoptTab(created.id, { reason: 'open', tab: loaded || created });
@@ -601,16 +572,6 @@ function urlMatches(pattern, url) {
   if (!glob.includes('://') && !glob.includes('*')) glob = '*' + glob + '*';
   const rx = new RegExp('^' + glob.split('*').map(escapeRegExp).join('.*') + '$');
   return rx.test(url);
-}
-
-/**
- * The "ThisURL" token in any URL field stands for the page the run started on, so
- * a macro that clicks through to another site can switch or navigate back to it.
- * e.g. `ThisURL` (exact), `ThisURL*` (it and anything under it).
- */
-function withThisURL(text) {
-  if (!text || !activeRun || !activeRun.thisURL) return text;
-  return String(text).split('ThisURL').join(activeRun.thisURL);
 }
 
 async function maybeAutoRun(tabId, url) {
@@ -762,43 +723,6 @@ async function maybeFollowNewTab(waitMs = 0) {
   }
 }
 
-/**
- * "go to tab it opens": adopt a tab that did not exist before this step. `beforeIds`
- * is snapshotted just before the step, so a leftover tab from earlier in the run can
- * never be mistaken for the one the click opened. Polls until a new tab shows up,
- * then waits for it to become a real page.
- */
-async function goToOpenedTab(beforeIds, waitMs) {
-  const deadline = Date.now() + waitMs;
-
-  for (;;) {
-    const tabs = await chrome.tabs.query({});
-    // Only a tab THIS click opened — its opener is the tab we clicked on. Never pick
-    // "the first new tab", which could be an ad/chat widget the page spawned, and
-    // would silently run the rest of the macro on the wrong page.
-    const pick =
-      tabs.find(
-        (t) => !beforeIds.has(t.id) && t.openerTabId === activeRun.tabId && !isRestricted(t)
-      ) || null;
-    if (pick) {
-      const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
-      if (loaded && !isRestricted(loaded)) {
-        markConsumed(pick.id);
-        // "go to" means actually go there — foreground it, or the macro clicks a
-        // background tab the page never reacts to.
-        await chrome.tabs.update(pick.id, { active: true }).catch(() => {});
-        await ensureAgent(pick.id).catch(() => {});
-        adoptTab(pick.id, { reason: 'goto', tab: loaded });
-        return pick.id;
-      }
-      markConsumed(pick.id); // don't keep retrying a tab we can't use
-    }
-
-    if (Date.now() >= deadline) return null;
-    await sleep(50);
-  }
-}
-
 /** True when a click may open a tab in a new context (target _blank / named). */
 function expectNewTab(step, res) {
   if (step.action !== 'click' || !res || !res.link) return false;
@@ -811,9 +735,8 @@ async function resolveSwitchTarget(step) {
     // Search every window, not just the run's: a tab the page opened can live in
     // another one, and matching a URL is meant to land on it wherever it is.
     const isNot = step.urlOp === 'isnot';
-    const pattern = withThisURL(step.url || '');
     const matches = (t) => {
-      const m = urlMatches(pattern, t.url || '');
+      const m = urlMatches(step.url || '', t.url || '');
       return isNot ? !m : m;
     };
     const tabs = await chrome.tabs.query({});
@@ -851,11 +774,11 @@ async function runBrowserCommand(step) {
   const tabId = activeRun.tabId;
   const command = step.command || 'newTab';
   const activate = step.activate !== false;
-  const url = step.url && step.url.trim() ? withThisURL(step.url.trim()) : undefined;
+  const url = step.url && step.url.trim() ? step.url.trim() : undefined;
 
   switch (command) {
     case 'newTab': {
-      const created = await chrome.tabs.create({ url, active: activate, windowId: activeRun.windowId });
+      const created = await chrome.tabs.create({ url, active: activate });
       markConsumed(created.id);
       if (activate) {
         adoptTab(created.id, { reason: 'open', tab: created });

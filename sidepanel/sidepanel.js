@@ -739,7 +739,6 @@ function onRuntimeMessage(msg) {
     const to = hostOf(msg.url);
     if (msg.reason === 'follow') log(`Followed new tab → ${to}`, 'ok');
     else if (msg.reason === 'open') log(`Opened new tab → ${to}`, 'ok');
-    else if (msg.reason === 'goto') log(msg.from ? `Went FROM ${hostOf(msg.from)} TO ${to}` : `Went to new tab → ${to}`, 'ok');
     else if (msg.from) log(`Switched FROM ${hostOf(msg.from)} TO ${to}`, 'ok');
     else log(`Switched TO ${to}`, 'ok');
 
@@ -762,8 +761,7 @@ function onRuntimeMessage(msg) {
     const indent = msg.depth ? '    '.repeat(msg.depth) : '';
     const label = msg.action === 'browser' && msg.command ? BROWSER_LABELS[msg.command] : ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action;
     const detail = msg.label ? ` "${msg.label}"` : '';
-    const tab = msg.tabId != null ? ` [#${msg.tabId}]` : '';
-    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${detail}${where}${tab}`);
+    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${detail}${where}`);
 
   } else if (msg.type === 'RUN_STATUS') {
     if (msg.state === 'running') {
@@ -1080,7 +1078,6 @@ function stepHeading(step) {
     name ? actionName : '',
     step.action === 'if' ? conditionSummary(step.condition) : '',
     step.action === 'gamble' ? gambleSummary(step) : '',
-    step.action === 'click' && step.goTo ? 'go to tab it opens' : '',
     step.action === 'switchTab' && step.mode === 'url'
       ? `${step.urlOp === 'isnot' ? 'IS NOT' : 'IS'} ${step.url || '*'}`
       : ''
@@ -1226,11 +1223,6 @@ function buildStepRow(step, idx, total, path) {
         fieldRow('Scan', secondsField(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms })))
       );
     }
-    if (step.action === 'click') {
-      body.appendChild(
-        checkboxRow('go to tab it opens', step.goTo === true, (v) => updateStep(step.id, { goTo: v }))
-      );
-    }
   } else if (step.action === 'scan') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
@@ -1356,9 +1348,9 @@ function buildStepRow(step, idx, total, path) {
     );
     if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
-    body.appendChild(urlField(step));
+    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
   } else if (step.action === 'openTab') {
-    body.appendChild(urlField(step));
+    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   } else if (step.action === 'browser') {
     const command = step.command || 'newTab';
@@ -1373,7 +1365,7 @@ function buildStepRow(step, idx, total, path) {
       )
     );
     if (BROWSER_URL_COMMANDS.includes(command)) {
-      body.appendChild(urlField(step));
+      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
     }
     if (BROWSER_ACTIVATE_COMMANDS.includes(command)) {
       body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
@@ -1411,7 +1403,7 @@ function buildStepRow(step, idx, total, path) {
           )
         )
       );
-      body.appendChild(urlField(step));
+      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
     }
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   }
@@ -1545,13 +1537,6 @@ function hintSpan(text) {
   span.className = 'field-label';
   span.textContent = text;
   return span;
-}
-
-/** A URL field that also accepts the ThisURL token (the page the macro started on). */
-function urlField(step) {
-  const row = fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v })));
-  row.appendChild(hintSpan('ThisURL = page the macro started on'));
-  return row;
 }
 
 /* Times are stored in milliseconds but shown/edited in seconds. */
