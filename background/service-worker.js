@@ -6,6 +6,12 @@
 const RESTRICTED = /^(chrome|edge|about|chrome-extension|devtools|view-source|data):/i;
 const RESTRICTED_HOST = /^https:\/\/chromewebstore\.google\.com/i;
 
+// How long to wait for a new tab the page opened itself to be announced: a link
+// that targets a new context gets a real grace, any other click just enough to
+// catch a fast window.open(). Both end early the moment the tab shows up.
+const NEW_TAB_GRACE = 1200;
+const CLICK_GRACE = 200;
+
 let activeRun = null; // { cancelled, tabId, macroId }
 
 /* ---------------------------------------------------------------- *
@@ -272,8 +278,13 @@ async function runSteps(steps, depth) {
     activeRun.stepStartedAt = Date.now();
     const res = await runStep(step, depth || 0);
 
-    // Catch a tab this step just opened, so the following step can use it.
-    const adopted = activeRun.follow ? await maybeFollowNewTab() : null;
+    // Catch a tab this step just opened, so the following step can use it. A tab
+    // the page opens itself can be announced a beat after the click handler
+    // returns, so give a click a short grace to show up — otherwise the next step
+    // fires on the old page. A link that targets a new context is worth waiting
+    // longer for, so its fallback doesn't race the page and open a duplicate.
+    const grace = expectNewTab(step, res) ? NEW_TAB_GRACE : step.action === 'click' ? CLICK_GRACE : 0;
+    const adopted = activeRun.follow ? await maybeFollowNewTab(grace) : null;
     if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
       await openLinkFallback(res.link, res.urlBefore);
     }
@@ -544,16 +555,11 @@ async function waitForNewTabUrl(tabId, timeout = 25000) {
 }
 
 /**
- * If a step opened a tab (a click that redirects, window.open, …), move the run
- * onto it so following steps act on the new site.
- *
- * The window is the whole run, not the current step: the tab can appear well
- * after the click handler returns (JS redirects, async handlers), and a later
- * step must still be able to pick it up. This is called before *and* after each
- * step, and is cheap — no sleeping.
- * @returns the tab id that was adopted, or null.
+ * The best tab to adopt right now: one created since the run began that we have
+ * not used yet, preferring the tab whose opener is the tab we're on. Returns the
+ * record (not yet marked consumed) or null.
  */
-async function maybeFollowNewTab() {
+function followCandidate() {
   if (!activeRun || !activeRun.follow) return null;
   const since = activeRun.startedAt || 0;
 
@@ -567,24 +573,55 @@ async function maybeFollowNewTab() {
   if (!candidates.length) return null;
 
   const sameWindow = candidates.filter((t) => t.windowId === activeRun.windowId);
-  const pick =
+  return (
     sameWindow.find((t) => t.openerTabId === activeRun.tabId) ||
     candidates.find((t) => t.openerTabId === activeRun.tabId) ||
     (sameWindow.length === 1 ? sameWindow[0] : null) ||
-    (candidates.length === 1 ? candidates[0] : null);
-  if (!pick) return null;
+    (candidates.length === 1 ? candidates[0] : null)
+  );
+}
 
-  pick.consumed = true;
+/**
+ * If a step opened a tab (a click that redirects, window.open, …), move the run
+ * onto it so following steps act on the new site.
+ *
+ * `waitMs` is a grace for a tab the page opens itself: the browser announces it a
+ * beat after the click handler returns, so a caller that expects a tab passes a
+ * grace instead of a single look — otherwise the next step runs on the old page.
+ * Polling ends early the moment an adoptable tab shows up.
+ * @returns the tab id that was adopted, or null.
+ */
+async function maybeFollowNewTab(waitMs = 0) {
+  const deadline = Date.now() + waitMs;
 
-  // A just-opened tab has no URL yet (url:'' / about:blank / chrome://newtab), so
-  // wait for it to become a real page BEFORE judging whether it can be scripted —
-  // otherwise every fresh tab looks "restricted" and adoption silently fails.
-  const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
-  if (!loaded || isRestricted(loaded)) return null;
+  for (;;) {
+    if (!activeRun || !activeRun.follow) return null;
 
-  await ensureAgent(pick.id).catch(() => {});
-  adoptTab(pick.id);
-  return pick.id;
+    const pick = followCandidate();
+    if (pick) {
+      pick.consumed = true;
+
+      // A just-opened tab has no URL yet (url:'' / about:blank / chrome://newtab), so
+      // wait for it to become a real page BEFORE judging whether it can be scripted —
+      // otherwise every fresh tab looks "restricted" and adoption silently fails.
+      const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
+      if (loaded && !isRestricted(loaded)) {
+        await ensureAgent(pick.id).catch(() => {});
+        adoptTab(pick.id);
+        return pick.id;
+      }
+    }
+
+    if (Date.now() >= deadline) return null;
+    await sleep(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
+}
+
+/** True when a click may open a tab in a new context (target _blank / named). */
+function expectNewTab(step, res) {
+  if (step.action !== 'click' || !res || !res.link) return false;
+  const target = res.link.target || '';
+  return !!target && !/^_(self|top|parent)$/i.test(target);
 }
 
 async function resolveSwitchTarget(step) {
