@@ -2,7 +2,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
-const { MessageDecoder, buildLaunchArgs } = require('../src/cdp');
+const os = require('os');
+const { MessageDecoder, buildLaunchArgs, withChrome } = require('../src/cdp');
 
 test('MessageDecoder splits NUL-delimited frames across chunks', () => {
   const d = new MessageDecoder();
@@ -29,4 +30,18 @@ test('buildLaunchArgs carries the flags the Extensions domain needs', () => {
 test('buildLaunchArgs adds headless on request', () => {
   const a = buildLaunchArgs({ userDataDir: '/x', profileDir: 'Default', headless: true });
   assert.ok(a.includes('--headless=new'));
+});
+
+test('withChrome rejects cleanly when the child exits immediately (no EPIPE crash)', async () => {
+  // A process that exits at once stands in for "Chrome is already running":
+  // the debug pipe dies, and this must reject rather than throw an unhandled
+  // stream error.
+  await assert.rejects(
+    withChrome(
+      process.execPath,
+      { userDataDir: os.tmpdir(), profileDir: 'Default', extraArgs: ['-e', 'process.exit(1)'] },
+      async () => 'never',
+    ),
+    /did not accept the debug pipe/,
+  );
 });

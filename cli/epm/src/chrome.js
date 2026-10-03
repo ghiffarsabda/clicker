@@ -174,8 +174,9 @@ function isRunning(browser) {
   const names = browser.processNames || [];
   if (!names.length) return false;
   if (WIN) {
-    const r = runSync('tasklist', ['/FI', `IMAGENAME eq ${names[0]}`]);
-    return new RegExp(names[0].replace('.', '\\.'), 'i').test(r.stdout || '');
+    const r = runSync('tasklist', ['/FO', 'CSV', '/NH'], { windowsHide: true });
+    const out = (r.stdout || '').toLowerCase();
+    return names.some((n) => out.includes(`"${n.toLowerCase()}"`));
   }
   const r = runSync('ps', ['-A', '-o', 'comm=']);
   const running = new Set((r.stdout || '').split('\n').map((s) => path.basename(s.trim())));

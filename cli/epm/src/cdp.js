@@ -35,12 +35,18 @@ class CdpPipe {
     this._decoder = new MessageDecoder();
     this._nextId = 1;
     this._pending = new Map();
+    this._dead = null;
+
     const read = child.stdio[4];
+    const write = child.stdio[3];
     read.on('data', (d) => {
       for (const raw of this._decoder.push(d)) this._onMessage(raw);
     });
     read.on('end', () => this._failAll(new Error('Chrome closed the debug pipe')));
     read.on('error', (e) => this._failAll(e));
+    // A dead write socket (Chrome exited) emits EPIPE asynchronously; without a
+    // listener that becomes an unhandled 'error' and crashes the process.
+    write.on('error', (e) => this._failAll(e));
   }
 
   _onMessage(raw) {
@@ -54,11 +60,13 @@ class CdpPipe {
   }
 
   _failAll(e) {
+    if (!this._dead) this._dead = e;
     for (const p of this._pending.values()) p.reject(e);
     this._pending.clear();
   }
 
   send(method, params = {}, timeoutMs = 30000, sessionId = null) {
+    if (this._dead) return Promise.reject(this._dead);
     const id = this._nextId++;
     return new Promise((resolve, reject) => {
       const timer = timeoutMs > 0
@@ -102,13 +110,18 @@ function buildLaunchArgs({ userDataDir, profileDir, headless = false, extraArgs 
  */
 async function withChrome(binary, options, fn) {
   const args = buildLaunchArgs(options);
-  const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'] });
+  const child = spawn(binary, args, { stdio: ['ignore', 'ignore', 'pipe', 'pipe', 'pipe'], windowsHide: true });
   let stderr = '';
   child.stdio[2].on('data', (d) => { stderr += d; });
 
   const cdp = new CdpPipe(child);
   let exited = false;
-  const exitP = new Promise((resolve) => child.once('exit', (code, signal) => { exited = true; resolve({ code, signal }); }));
+  let exitInfo = null;
+  const exitP = new Promise((resolve) => {
+    const done = (info) => { exited = true; exitInfo = info; resolve(info); };
+    child.once('exit', (code, signal) => done({ code, signal }));
+    child.once('error', (error) => done({ error }));
+  });
   const tail = () => {
     const s = stderr.trim();
     return s ? '\n    ' + s.split('\n').slice(-4).join('\n    ') : '';
@@ -119,7 +132,13 @@ async function withChrome(binary, options, fn) {
       cdp.send('Browser.getVersion', {}, 20000).then(() => true, () => false),
       exitP.then(() => false),
     ]);
-    if (!ready) throw new Error('Chrome did not accept the debug pipe — is it already running? Close Chrome and retry.' + tail());
+    if (!ready) {
+      let why = '';
+      if (exitInfo && exitInfo.error) why = ' (' + exitInfo.error.message + ')';
+      else if (exitInfo && typeof exitInfo.code === 'number') why = ' (Chrome exited with code ' + exitInfo.code + ')';
+      throw new Error('Chrome did not accept the debug pipe' + why
+        + ' \u2014 is Chrome already running? Close it (including background/tray) and retry.' + tail());
+    }
     return await fn(cdp, child);
   } finally {
     try { if (!exited) await cdp.send('Browser.close', {}, 4000); } catch { /* best effort */ }
