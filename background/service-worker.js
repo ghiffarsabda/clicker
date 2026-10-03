@@ -725,13 +725,20 @@ async function resolveSwitchTarget(step) {
     // Search every window, not just the run's: a tab the page opened can live in
     // another one, and matching a URL is meant to land on it wherever it is.
     const isNot = step.urlOp === 'isnot';
+    const matches = (t) => {
+      const m = urlMatches(step.url || '', t.url || '');
+      return isNot ? !m : m;
+    };
     const tabs = await chrome.tabs.query({});
-    return (
-      tabs.filter((t) => t.id !== activeRun.tabId && !isRestricted(t)).find((t) => {
-        const match = urlMatches(step.url || '', t.url || '');
-        return isNot ? !match : match;
-      }) || null
-    );
+    const others = tabs.filter((t) => t.id !== activeRun.tabId && !isRestricted(t));
+
+    // Prefer another tab. Failing that, the tab we are already on counts if it
+    // satisfies the match — "IS NOT google" while already on the other site
+    // should stay put, not abort the macro for lack of a target.
+    const other = others.find(matches);
+    if (other) return other;
+    const here = tabs.find((t) => t.id === activeRun.tabId);
+    return here && !isRestricted(here) && matches(here) ? here : null;
   }
 
   const all = await chrome.tabs.query({ windowId: activeRun.windowId });
