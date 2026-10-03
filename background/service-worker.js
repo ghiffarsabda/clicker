@@ -13,6 +13,9 @@ const RESTRICTED_HOST = /^https:\/\/chromewebstore\.google\.com/i;
 // runSteps — so a stray tab the page opens on its own can't be adopted.
 const NEW_TAB_GRACE = 1200;
 const CLICK_GRACE = 200;
+// A tab we've been trying to follow that never becomes a usable page is abandoned
+// after this long, so a broken popup can't stall every step forever.
+const NEW_TAB_GIVEUP = 10000;
 
 let activeRun = null; // { cancelled, tabId, macroId }
 
@@ -338,7 +341,7 @@ async function runSteps(steps, depth) {
 
     // A previous step may have opened a tab after a delay — move onto it first,
     // unless we just deliberately moved to a tab (a switch/open) and owe it a step.
-    if (activeRun.follow && !activeRun.blockFollow) await maybeFollowNewTab();
+    if (activeRun.follow && !activeRun.blockFollow) await maybeFollowNewTab(NEW_TAB_GRACE, true);
     activeRun.blockFollow = false;
 
     emit({
@@ -748,28 +751,36 @@ function followCandidate() {
  * `waitMs` is a grace for a tab the page opens itself: the browser announces it a
  * beat after the click handler returns, so a caller that expects a tab passes a
  * grace instead of a single look — otherwise the next step runs on the old page.
- * Polling ends early the moment an adoptable tab shows up.
+ * `requireExisting` is for the check at the top of a step: don't idle waiting for a
+ * tab to appear, but if one is already pending, wait for it to become ready so the
+ * step still runs on it (closing the gap where a slow tab got skipped).
+ *
+ * A picked tab is only marked consumed once it is actually adopted — a tab that is
+ * still loading is left for the next check rather than dropped (the follow gap).
  * @returns the tab id that was adopted, or null.
  */
-async function maybeFollowNewTab(waitMs = 0) {
+async function maybeFollowNewTab(waitMs = 0, requireExisting = false) {
   const deadline = Date.now() + waitMs;
 
   for (;;) {
     if (!activeRun || !activeRun.follow) return null;
 
     const pick = followCandidate();
-    if (pick) {
-      pick.consumed = true;
-
-      // A just-opened tab has no URL yet (url:'' / about:blank / chrome://newtab), so
-      // wait for it to become a real page BEFORE judging whether it can be scripted —
-      // otherwise every fresh tab looks "restricted" and adoption silently fails.
-      const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
-      if (loaded && !isRestricted(loaded)) {
+    if (!pick) {
+      if (requireExisting) return null; // nothing pending — don't idle
+    } else if (Date.now() - (pick.time || 0) > NEW_TAB_GIVEUP) {
+      markConsumed(pick.id); // never became a real page — stop chasing it
+    } else {
+      const tab = await chrome.tabs.get(pick.id).catch(() => null);
+      if (!tab) {
+        markConsumed(pick.id); // the tab is gone
+      } else if (tab.status === 'complete' && tab.url && !isRestricted(tab)) {
+        markConsumed(pick.id);
         await ensureAgent(pick.id).catch(() => {});
-        adoptTab(pick.id, { reason: 'follow', tab: loaded });
+        adoptTab(pick.id, { reason: 'follow', tab });
         return pick.id;
       }
+      // still loading: leave it unconsumed and keep polling until the deadline
     }
 
     if (Date.now() >= deadline) return null;
