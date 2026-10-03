@@ -1078,6 +1078,7 @@ function stepHeading(step) {
     name ? actionName : '',
     step.action === 'if' ? conditionSummary(step.condition) : '',
     step.action === 'gamble' ? gambleSummary(step) : '',
+    step.action === 'click' && step.goTo ? 'go to tab it opens' : '',
     step.action === 'switchTab' && step.mode === 'url'
       ? `${step.urlOp === 'isnot' ? 'IS NOT' : 'IS'} ${step.url || '*'}`
       : ''
@@ -1223,6 +1224,11 @@ function buildStepRow(step, idx, total, path) {
         fieldRow('Scan', secondsField(step.scanMs || 0, (ms) => updateStep(step.id, { scanMs: ms })))
       );
     }
+    if (step.action === 'click') {
+      body.appendChild(
+        checkboxRow('go to tab it opens', step.goTo === true, (v) => updateStep(step.id, { goTo: v }))
+      );
+    }
   } else if (step.action === 'scan') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));
@@ -1348,9 +1354,9 @@ function buildStepRow(step, idx, total, path) {
     );
     if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
-    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    body.appendChild(urlField(step));
   } else if (step.action === 'openTab') {
-    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    body.appendChild(urlField(step));
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   } else if (step.action === 'browser') {
     const command = step.command || 'newTab';
@@ -1365,7 +1371,7 @@ function buildStepRow(step, idx, total, path) {
       )
     );
     if (BROWSER_URL_COMMANDS.includes(command)) {
-      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+      body.appendChild(urlField(step));
     }
     if (BROWSER_ACTIVATE_COMMANDS.includes(command)) {
       body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
@@ -1403,7 +1409,7 @@ function buildStepRow(step, idx, total, path) {
           )
         )
       );
-      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+      body.appendChild(urlField(step));
     }
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   }
@@ -1537,6 +1543,13 @@ function hintSpan(text) {
   span.className = 'field-label';
   span.textContent = text;
   return span;
+}
+
+/** A URL field that also accepts the ThisURL token (the page the macro started on). */
+function urlField(step) {
+  const row = fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v })));
+  row.appendChild(hintSpan('ThisURL = page the macro started on'));
+  return row;
 }
 
 /* Times are stored in milliseconds but shown/edited in seconds. */

@@ -240,6 +240,7 @@ async function runMacro(macroId, opts = {}) {
     startedAt: Date.now(),
     stepStartedAt: Date.now(),
     tabUrl: tab.url || '',
+    thisURL: tab.url || '', // the "ThisURL" token: the page the run started on
     loopMemory: {}
   };
 
@@ -342,9 +343,17 @@ async function runSteps(steps, depth) {
     // adopted instead of the page we're on. A link that targets a new context gets
     // the longer grace, so its fallback doesn't race the page and open a duplicate.
     const opensTab = step.action === 'click' && res && res.link;
-    const grace = !opensTab ? 0 : expectNewTab(step, res) ? NEW_TAB_GRACE : CLICK_GRACE;
-    const adopted = activeRun.follow && !activeRun.blockFollow ? await maybeFollowNewTab(grace) : null;
-    if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
+    const goTo = step.action === 'click' && step.goTo === true;
+    const grace = !opensTab
+      ? goTo
+        ? NEW_TAB_GRACE
+        : 0
+      : expectNewTab(step, res)
+        ? NEW_TAB_GRACE
+        : CLICK_GRACE;
+    const wantsFollow = activeRun.follow || goTo;
+    const adopted = wantsFollow && !activeRun.blockFollow ? await maybeFollowNewTab(grace, goTo) : null;
+    if (step.action === 'click' && wantsFollow && !adopted && res && res.link) {
       await openLinkFallback(res.link, res.urlBefore);
     }
   }
@@ -425,12 +434,13 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'navigate') {
-    if (!step.url) throw new Error('Navigate step has no URL');
+    const url = withThisURL(step.url);
+    if (!url) throw new Error('Navigate step has no URL');
     const before = await chrome.tabs
       .get(tabId)
       .then((t) => t.url || '')
       .catch(() => '');
-    await chrome.tabs.update(tabId, { url: step.url });
+    await chrome.tabs.update(tabId, { url });
     await waitForTabComplete(tabId, before);
     await sleep(250);
     await ensureAgent(tabId);
@@ -439,8 +449,9 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'openTab') {
-    if (!step.url) throw new Error('Open tab step has no URL');
-    const created = await chrome.tabs.create({ url: step.url, active: step.activate !== false });
+    const url = withThisURL(step.url);
+    if (!url) throw new Error('Open tab step has no URL');
+    const created = await chrome.tabs.create({ url, active: step.activate !== false, windowId: activeRun.windowId });
     const loaded = await waitForNewTabUrl(created.id);
     await ensureAgent(created.id);
     adoptTab(created.id, { reason: 'open', tab: loaded });
@@ -501,7 +512,7 @@ async function openLinkFallback(link, urlBefore) {
   emit({ type: 'NOTE', text: `Opened ${link.href} directly (the page's own popup was blocked)` });
 
   if (link.target === '_blank') {
-    const created = await chrome.tabs.create({ url: link.href, active: true });
+    const created = await chrome.tabs.create({ url: link.href, active: true, windowId: activeRun.windowId });
     const loaded = await waitForNewTabUrl(created.id).catch(() => null);
     await ensureAgent(created.id).catch(() => {});
     adoptTab(created.id, { reason: 'open', tab: loaded || created });
@@ -572,6 +583,16 @@ function urlMatches(pattern, url) {
   if (!glob.includes('://') && !glob.includes('*')) glob = '*' + glob + '*';
   const rx = new RegExp('^' + glob.split('*').map(escapeRegExp).join('.*') + '$');
   return rx.test(url);
+}
+
+/**
+ * The "ThisURL" token in any URL field stands for the page the run started on, so
+ * a macro that clicks through to another site can switch or navigate back to it.
+ * e.g. `ThisURL` (exact), `ThisURL*` (it and anything under it).
+ */
+function withThisURL(text) {
+  if (!text || !activeRun || !activeRun.thisURL) return text;
+  return String(text).split('ThisURL').join(activeRun.thisURL);
 }
 
 async function maybeAutoRun(tabId, url) {
@@ -665,8 +686,8 @@ async function waitForNewTabUrl(tabId, timeout = 25000) {
  * not used yet, preferring the tab whose opener is the tab we're on. Returns the
  * record (not yet marked consumed) or null.
  */
-function followCandidate() {
-  if (!activeRun || !activeRun.follow) return null;
+function followCandidate(force) {
+  if (!activeRun || (!activeRun.follow && !force)) return null;
   const since = activeRun.startedAt || 0;
 
   const candidates = recentTabs.filter(
@@ -697,13 +718,13 @@ function followCandidate() {
  * Polling ends early the moment an adoptable tab shows up.
  * @returns the tab id that was adopted, or null.
  */
-async function maybeFollowNewTab(waitMs = 0) {
+async function maybeFollowNewTab(waitMs = 0, force = false) {
   const deadline = Date.now() + waitMs;
 
   for (;;) {
-    if (!activeRun || !activeRun.follow) return null;
+    if (!activeRun || (!activeRun.follow && !force)) return null;
 
-    const pick = followCandidate();
+    const pick = followCandidate(force);
     if (pick) {
       pick.consumed = true;
 
@@ -735,8 +756,9 @@ async function resolveSwitchTarget(step) {
     // Search every window, not just the run's: a tab the page opened can live in
     // another one, and matching a URL is meant to land on it wherever it is.
     const isNot = step.urlOp === 'isnot';
+    const pattern = withThisURL(step.url || '');
     const matches = (t) => {
-      const m = urlMatches(step.url || '', t.url || '');
+      const m = urlMatches(pattern, t.url || '');
       return isNot ? !m : m;
     };
     const tabs = await chrome.tabs.query({});
@@ -774,11 +796,11 @@ async function runBrowserCommand(step) {
   const tabId = activeRun.tabId;
   const command = step.command || 'newTab';
   const activate = step.activate !== false;
-  const url = step.url && step.url.trim() ? step.url.trim() : undefined;
+  const url = step.url && step.url.trim() ? withThisURL(step.url.trim()) : undefined;
 
   switch (command) {
     case 'newTab': {
-      const created = await chrome.tabs.create({ url, active: activate });
+      const created = await chrome.tabs.create({ url, active: activate, windowId: activeRun.windowId });
       markConsumed(created.id);
       if (activate) {
         adoptTab(created.id, { reason: 'open', tab: created });
