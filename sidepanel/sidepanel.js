@@ -739,6 +739,7 @@ function onRuntimeMessage(msg) {
     const to = hostOf(msg.url);
     if (msg.reason === 'follow') log(`Followed new tab → ${to}`, 'ok');
     else if (msg.reason === 'open') log(`Opened new tab → ${to}`, 'ok');
+    else if (msg.reason === 'goto') log(msg.from ? `Went FROM ${hostOf(msg.from)} TO ${to}` : `Went to new tab → ${to}`, 'ok');
     else if (msg.from) log(`Switched FROM ${hostOf(msg.from)} TO ${to}`, 'ok');
     else log(`Switched TO ${to}`, 'ok');
 
@@ -761,7 +762,8 @@ function onRuntimeMessage(msg) {
     const indent = msg.depth ? '    '.repeat(msg.depth) : '';
     const label = msg.action === 'browser' && msg.command ? BROWSER_LABELS[msg.command] : ACTIONS[msg.action] ? ACTIONS[msg.action].label : msg.action;
     const detail = msg.label ? ` "${msg.label}"` : '';
-    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${detail}${where}`);
+    const tab = msg.tabId != null ? ` [#${msg.tabId}]` : '';
+    log(`${indent}${tag}Step ${msg.index + 1}/${msg.total} — ${label}${detail}${where}${tab}`);
 
   } else if (msg.type === 'RUN_STATUS') {
     if (msg.state === 'running') {

@@ -340,6 +340,7 @@ async function runSteps(steps, depth) {
       action: step.action,
       command: step.action === 'browser' ? step.command : undefined,
       label: step.label || (step.target && (step.target.label || step.target.selector)) || '',
+      tabId: activeRun.tabId,
       url: activeRun.tabUrl,
       iteration: activeRun.looping ? activeRun.iteration : null,
       iterations: activeRun.loopTotal
@@ -784,8 +785,11 @@ async function goToOpenedTab(beforeIds, waitMs) {
       const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
       if (loaded && !isRestricted(loaded)) {
         markConsumed(pick.id);
+        // "go to" means actually go there — foreground it, or the macro clicks a
+        // background tab the page never reacts to.
+        await chrome.tabs.update(pick.id, { active: true }).catch(() => {});
         await ensureAgent(pick.id).catch(() => {});
-        adoptTab(pick.id, { reason: 'follow', tab: loaded });
+        adoptTab(pick.id, { reason: 'goto', tab: loaded });
         return pick.id;
       }
       markConsumed(pick.id); // don't keep retrying a tab we can't use
