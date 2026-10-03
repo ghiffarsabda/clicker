@@ -1561,9 +1561,39 @@ function hintSpan(text) {
 
 /** A URL field that also accepts the ThisURL token (the page the macro started on). */
 function urlField(step) {
-  const row = fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v })));
-  row.appendChild(hintSpan('ThisURL = page the macro started on'));
-  return row;
+  const wrap = document.createElement('div');
+  wrap.className = 'url-field';
+
+  const hint = document.createElement('div');
+  hint.className = 'field-hint';
+
+  // When the field uses the token, show what it currently resolves to (the page a
+  // run started on if you pressed Run now), so it isn't a mystery.
+  const refreshHint = (value) => {
+    if (!String(value || '').includes('ThisURL')) {
+      hint.textContent = 'ThisURL = the page the run starts on';
+      return;
+    }
+    hint.textContent = 'ThisURL = …';
+    chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then(([t]) => {
+        hint.textContent = `ThisURL = ${(t && t.url) || 'the page the run starts on'}`;
+      })
+      .catch(() => {
+        hint.textContent = 'ThisURL = the page the run starts on';
+      });
+  };
+
+  const input = textInput(step.url || '', (v) => {
+    updateStep(step.id, { url: v });
+    refreshHint(v);
+  });
+
+  wrap.appendChild(fieldRow('URL', input));
+  wrap.appendChild(hint);
+  refreshHint(step.url);
+  return wrap;
 }
 
 /* Times are stored in milliseconds but shown/edited in seconds. */

@@ -251,6 +251,11 @@ async function runMacro(macroId, opts = {}) {
     loopMemory: {}
   };
 
+  // Make ThisURL concrete: it is always the page this run started on.
+  if (JSON.stringify(macro.steps || []).includes('ThisURL')) {
+    emit({ type: 'NOTE', text: `ThisURL = ${tab.url || '(unknown)'}` });
+  }
+
   // Loop mode: repeat the whole step list `loopCount` times (0 = until stopped).
   const looping = !!macro.loop;
   const limit = looping ? (Number(macro.loopCount) > 0 ? Number(macro.loopCount) : Infinity) : 1;

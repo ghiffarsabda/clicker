@@ -523,6 +523,19 @@ body {
   border-color: var(--accent);
 }
 
+/* URL field: the ThisURL hint sits on its own line, so it never squeezes the input. */
+.url-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.field-hint {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 /* Number field with its unit shown right after the value, e.g. "5 s" */
 .num-field {
   flex: 1;
