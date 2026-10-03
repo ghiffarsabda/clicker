@@ -6,7 +6,7 @@ const { log, err } = require('./util');
 
 const VALUE_FLAGS = new Set([
   'profile', 'mode', 'browser', 'user-data-dir', 'source', 'repo', 'branch',
-  'out', 'base-url', 'crx-url', 'update-url',
+  'out', 'base-url', 'crx-url', 'update-url', 'bump', 'dist-repo',
 ]);
 const REPEAT_FLAGS = new Set(['profile']);
 
@@ -42,7 +42,8 @@ be closed only for the session commands (install/update/import).
 Usage: epm <command> [options]
 
 Commands:
-  pack                 Build a signed .crx + updates.xml for hosting
+  publish [--bump patch|minor|major]   Bump, pack and push the CRX + update manifest
+  pack                 Build a signed .crx + updates.xml for hosting (no push)
   policy [install|uninstall|status]   Force-install across every profile (persistent)
   install              Load into every profile for the current session only
   update               git pull, then reload it in every profile
@@ -99,6 +100,7 @@ async function main(argv) {
     doctor: cmd.cmdDoctor,
     pack: cmd.cmdPack,
     policy: cmd.cmdPolicy,
+    publish: cmd.cmdPublish,
   };
 
   const fn = table[command];

@@ -11,6 +11,8 @@ const DEFAULT_CONFIG = {
   repo: 'https://github.com/ghiffarsabda/clicker.git',
   branch: 'main',
   source: path.join(EPM_DIR, 'clicker'),
+  distRepo: null,
+  baseUrl: null,
   browser: null,
   userDataDir: null,
 };

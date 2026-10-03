@@ -71,7 +71,8 @@ epm import macros.json         # import a Backup export  (--mode replace to over
 ## Commands
 
 ```
-epm pack [--base-url u] [--crx-url u] [--out dir]   Build .crx + updates.xml
+epm publish [--bump patch|minor|major]              Bump, pack and push the release
+epm pack [--base-url u] [--crx-url u] [--out dir]   Build .crx + updates.xml (no push)
 epm policy install --update-url <url>               Force-install across all profiles
 epm policy uninstall                                Remove the policy entry
 epm policy status                                   Show the policy target on this OS
@@ -98,10 +99,15 @@ Defaults to the repo `https://github.com/ghiffarsabda/clicker.git`, cloned to
   "repo": "https://github.com/ghiffarsabda/clicker.git",
   "branch": "main",
   "source": "~/.epm/clicker",
+  "distRepo": "https://github.com/<you>/clicker-epm.git",
+  "baseUrl": "https://<you>.github.io/clicker-epm",
   "browser": null,
   "userDataDir": null
 }
 ```
+
+`distRepo` + `baseUrl` drive `epm publish`; the base URL is derived from a GitHub
+`distRepo` automatically if you leave `baseUrl` unset.
 
 ## Good to know
 

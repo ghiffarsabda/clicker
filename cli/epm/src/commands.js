@@ -11,6 +11,7 @@ const source = require('./source');
 const macros = require('./macros');
 const pack = require('./pack');
 const policy = require('./policy');
+const publish = require('./publish');
 
 function pickBrowser(cfg) {
   const browsers = chrome.findBrowsers(cfg);
@@ -383,7 +384,70 @@ async function cmdPolicy(cfg, opts) {
   return 0;
 }
 
+async function cmdPublish(cfg, opts) {
+  await source.ensureClone(cfg);
+  const { json } = ext.readManifest(cfg.source);
+  if (!json.key) throw new Error('manifest.json has no "key" — run `epm keygen` first');
+  const keyPath = path.join(EPM_DIR, 'key.pem');
+  if (!exists(keyPath)) throw new Error('private key not found at ' + keyPath + ' — run `epm keygen`');
+
+  const distRepo = opts['dist-repo'] || cfg.distRepo;
+  const baseUrl = opts['base-url'] || cfg.baseUrl || (distRepo ? publish.deriveBaseUrl(distRepo) : null);
+  if (!distRepo) throw new Error('no distribution repo — set "distRepo" in ' + CONFIG_PATH + ' or pass --dist-repo');
+  if (!baseUrl) throw new Error('no base URL — set "baseUrl" in ' + CONFIG_PATH + ' or pass --base-url');
+  const base = String(baseUrl).replace(/\/+$/, '');
+  const dry = !!opts['dry-run'];
+
+  if (opts.bump) {
+    const kind = String(opts.bump);
+    if (!['patch', 'minor', 'major'].includes(kind)) throw new Error('--bump must be patch, minor or major');
+    const next = publish.bumpVersion(json.version, kind);
+    head(`Version ${json.version} \u2192 ${next}`);
+    if (dry) {
+      dim('[dry-run] would update + commit manifest.json and push the source repo');
+    } else {
+      json.version = next;
+      fs.writeFileSync(path.join(cfg.source, 'manifest.json'), JSON.stringify(json, null, 2) + '\n');
+      await publish.commitPaths(cfg.source, ['manifest.json'], `Release v${next}`);
+      await publish.pushRepo(cfg.source);
+    }
+  }
+
+  head(`Packing ${json.name || 'extension'} v${json.version}`);
+  if (dry) {
+    dim(`[dry-run] would pack and push ${base}/updates.xml to ${distRepo}`);
+    return 0;
+  }
+
+  const outDir = path.join(EPM_DIR, 'dist');
+  const { crxPath, crxName } = await pack.buildCrx({
+    chrome: pickBrowser(cfg).binary,
+    source: cfg.source,
+    keyPath,
+    outDir,
+    name: json.name,
+    version: json.version,
+  });
+  const id = ext.extensionIdFromKey(json.key);
+  const updatesPath = path.join(outDir, 'updates.xml');
+  fs.writeFileSync(updatesPath, pack.buildUpdateXml(id, `${base}/${crxName}`, json.version));
+
+  await publish.syncDistRepo(
+    distRepo,
+    path.join(EPM_DIR, 'dist-repo'),
+    { [crxName]: crxPath, 'updates.xml': updatesPath },
+    `Publish v${json.version}`,
+  );
+
+  head('Published');
+  dim(`crx:     ${base}/${crxName}`);
+  dim(`updates: ${base}/updates.xml`);
+  dim(`id:      ${id}`);
+  dim('Chrome picks it up on its next update check (or the Update button).');
+  return 0;
+}
+
 module.exports = {
   cmdProfiles, cmdStatus, cmdInstall, cmdUpdate, cmdImport, cmdKeygen, cmdSource, cmdDoctor,
-  cmdPack, cmdPolicy,
+  cmdPack, cmdPolicy, cmdPublish,
 };
