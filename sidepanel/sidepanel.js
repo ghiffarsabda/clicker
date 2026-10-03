@@ -80,6 +80,7 @@ function conditionSummary(condition) {
 const BROWSER_COMMANDS = [
   ['newTab', 'New tab (Ctrl+T)'],
   ['closeTab', 'Close tab (Ctrl+W)'],
+  ['killOtherTabs', 'Close other tabs'],
   ['reopenTab', 'Reopen closed tab (Ctrl+Shift+T)'],
   ['nextTab', 'Next tab (Ctrl+Tab)'],
   ['prevTab', 'Previous tab (Ctrl+Shift+Tab)'],
@@ -646,7 +647,7 @@ function onAddStep(action, path) {
   } else if (action === 'browser') {
     addStep({ action: 'browser', command: 'newTab', url: '', activate: true }, branchPath);
   } else if (action === 'switchTab') {
-    addStep({ action: 'switchTab', mode: 'newest', url: '', activate: true }, branchPath);
+    addStep({ action: 'switchTab', mode: 'newest', urlOp: 'is', url: '', activate: true }, branchPath);
   } else if (action === 'navigate') {
     const step = addStep({ action: 'navigate', url: 'https://' }, branchPath);
     focusStepInput(step && step.id);
@@ -1071,7 +1072,10 @@ function stepHeading(step) {
   const detail = [
     name ? actionName : '',
     step.action === 'if' ? conditionSummary(step.condition) : '',
-    step.action === 'gamble' ? gambleSummary(step) : ''
+    step.action === 'gamble' ? gambleSummary(step) : '',
+    step.action === 'switchTab' && step.mode === 'url'
+      ? `${step.urlOp === 'isnot' ? 'IS NOT' : 'IS'} ${step.url || '*'}`
+      : ''
   ]
     .filter(Boolean)
     .join(' · ');
@@ -1381,6 +1385,19 @@ function buildStepRow(step, idx, total, path) {
       )
     );
     if ((step.mode || 'newest') === 'url') {
+      body.appendChild(
+        fieldRow(
+          'Match',
+          selectInput(
+            [
+              ['is', 'IS'],
+              ['isnot', 'IS NOT']
+            ],
+            step.urlOp || 'is',
+            (v) => updateStep(step.id, { urlOp: v })
+          )
+        )
+      );
       body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
     }
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));

@@ -236,6 +236,7 @@ async function runMacro(macroId, opts = {}) {
     macroId: macro.id,
     history: [tab.id],
     follow: macro.followTabs !== false,
+    blockFollow: false,
     startedAt: Date.now(),
     stepStartedAt: Date.now(),
     tabUrl: tab.url || '',
@@ -314,8 +315,10 @@ async function runSteps(steps, depth) {
     if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
     const step = steps[i];
 
-    // A previous step may have opened a tab after a delay — move onto it first.
-    if (activeRun.follow) await maybeFollowNewTab();
+    // A previous step may have opened a tab after a delay — move onto it first,
+    // unless we just deliberately moved to a tab (a switch/open) and owe it a step.
+    if (activeRun.follow && !activeRun.blockFollow) await maybeFollowNewTab();
+    activeRun.blockFollow = false;
 
     emit({
       type: 'RUN_PROGRESS',
@@ -339,7 +342,7 @@ async function runSteps(steps, depth) {
     // the longer grace, so its fallback doesn't race the page and open a duplicate.
     const opensTab = step.action === 'click' && res && res.link;
     const grace = !opensTab ? 0 : expectNewTab(step, res) ? NEW_TAB_GRACE : CLICK_GRACE;
-    const adopted = activeRun.follow ? await maybeFollowNewTab(grace) : null;
+    const adopted = activeRun.follow && !activeRun.blockFollow ? await maybeFollowNewTab(grace) : null;
     if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
       await openLinkFallback(res.link, res.urlBefore);
     }
@@ -621,6 +624,7 @@ function adoptTab(tabId) {
   if (tabId != null) markConsumed(tabId);
   if (!activeRun || activeRun.tabId === tabId) return;
   activeRun.tabId = tabId;
+  activeRun.blockFollow = true; // the tab we just moved to gets the next step to itself
   activeRun.history.push(tabId);
   if (activeRun.history.length > 20) activeRun.history.shift();
   chrome.tabs
@@ -717,6 +721,19 @@ function expectNewTab(step, res) {
 }
 
 async function resolveSwitchTarget(step) {
+  if (step.mode === 'url') {
+    // Search every window, not just the run's: a tab the page opened can live in
+    // another one, and matching a URL is meant to land on it wherever it is.
+    const isNot = step.urlOp === 'isnot';
+    const tabs = await chrome.tabs.query({});
+    return (
+      tabs.filter((t) => t.id !== activeRun.tabId && !isRestricted(t)).find((t) => {
+        const match = urlMatches(step.url || '', t.url || '');
+        return isNot ? !match : match;
+      }) || null
+    );
+  }
+
   const all = await chrome.tabs.query({ windowId: activeRun.windowId });
 
   if (step.mode === 'previous') {
@@ -725,9 +742,6 @@ async function resolveSwitchTarget(step) {
   }
 
   const others = all.filter((t) => t.id !== activeRun.tabId && !isRestricted(t));
-  if (step.mode === 'url') {
-    return others.filter((t) => urlMatches(step.url || '', t.url || ''))[0] || null;
-  }
   return others.slice().sort((a, b) => (b.id || 0) - (a.id || 0))[0] || null; // newest
 }
 
@@ -764,6 +778,24 @@ async function runBrowserCommand(step) {
       if (!next) throw new Error('Closed the last tab — nothing left to run on');
       adoptTab(next.id);
       await ensureAgent(next.id).catch(() => {});
+      return;
+    }
+
+    case 'killOtherTabs': {
+      const current = await chrome.tabs.get(tabId).catch(() => null);
+      if (!current) return;
+      const others = await chrome.tabs.query({ windowId: current.windowId });
+      const ids = others.filter((t) => t.id !== tabId).map((t) => t.id);
+      if (ids.length) {
+        await chrome.tabs.remove(ids).catch(() => {});
+        // Drop them from the follow tracker too: a dead tab id would otherwise make
+        // auto-follow spin until waitForNewTabUrl times out.
+        for (const id of ids) {
+          const idx = recentTabs.findIndex((r) => r.id === id);
+          if (idx !== -1) recentTabs.splice(idx, 1);
+        }
+      }
+      await ensureAgent(tabId).catch(() => {});
       return;
     }
 
