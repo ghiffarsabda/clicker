@@ -206,8 +206,13 @@ async function cancelPicker() {
 
 async function runMacro(macroId, opts = {}) {
   if (activeRun) {
-    if (!opts.auto) emit({ type: 'RUN_STATUS', state: 'error', error: 'A macro is already running' });
-    return;
+    // Recover from a wedged run (its tab is gone) instead of refusing forever.
+    const alive = await chrome.tabs.get(activeRun.tabId).catch(() => null);
+    if (alive) {
+      if (!opts.auto) emit({ type: 'RUN_STATUS', state: 'error', error: 'A macro is already running' });
+      return;
+    }
+    activeRun = null;
   }
 
   const { macros = [] } = await chrome.storage.local.get('macros');
@@ -234,12 +239,15 @@ async function runMacro(macroId, opts = {}) {
     tabId: tab.id,
     windowId: tab.windowId,
     macroId: macro.id,
+    name: macro.name,
+    auto: !!opts.auto,
     history: [tab.id],
     follow: macro.followTabs !== false,
     blockFollow: false,
     startedAt: Date.now(),
     stepStartedAt: Date.now(),
     tabUrl: tab.url || '',
+    thisURL: tab.url || '', // the "ThisURL" token: the page the run started on
     loopMemory: {}
   };
 
@@ -265,6 +273,11 @@ async function runMacro(macroId, opts = {}) {
 
     for (let iteration = 1; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
+      // Its tab closing used to spin error passes forever ("no tab with id"). Stop
+      // cleanly so the worker is freed and Stop/Run work again.
+      if (!(await chrome.tabs.get(activeRun.tabId).catch(() => null))) {
+        throw new Error('The tab was closed — run stopped.');
+      }
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
       activeRun.iteration = iteration;
       activeRun.loopTotal = totalLabel;
@@ -273,7 +286,9 @@ async function runMacro(macroId, opts = {}) {
         await runSteps(macro.steps, 0);
       } catch (e) {
         const error = String((e && e.message) || e);
-        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user/.test(error)) throw e;
+        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user|tab was closed/.test(error)) throw e;
+        // A gone tab is fatal — retrying the pass can never succeed.
+        if (/no tab with id/i.test(error)) throw new Error('The tab was closed — run stopped.');
         failedPasses++;
         emit({ type: 'RUN_LOOP_ERROR', error, iteration, total: totalLabel });
       }
@@ -425,12 +440,13 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'navigate') {
-    if (!step.url) throw new Error('Navigate step has no URL');
+    const url = withThisURL(step.url);
+    if (!url) throw new Error('Navigate step has no URL');
     const before = await chrome.tabs
       .get(tabId)
       .then((t) => t.url || '')
       .catch(() => '');
-    await chrome.tabs.update(tabId, { url: step.url });
+    await chrome.tabs.update(tabId, { url });
     await waitForTabComplete(tabId, before);
     await sleep(250);
     await ensureAgent(tabId);
@@ -439,8 +455,9 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'openTab') {
-    if (!step.url) throw new Error('Open tab step has no URL');
-    const created = await chrome.tabs.create({ url: step.url, active: step.activate !== false });
+    const url = withThisURL(step.url);
+    if (!url) throw new Error('Open tab step has no URL');
+    const created = await chrome.tabs.create({ url, active: step.activate !== false });
     const loaded = await waitForNewTabUrl(created.id);
     await ensureAgent(created.id);
     adoptTab(created.id, { reason: 'open', tab: loaded });
@@ -522,6 +539,12 @@ function stopRun() {
   chrome.tabs.sendMessage(activeRun.tabId, { type: 'CANCEL_EXECUTION' }).catch(() => {});
 }
 
+/** Snapshot of the current run, so a panel that opens mid-run can show Stop. */
+function runStatus() {
+  if (!activeRun) return { running: false };
+  return { running: true, name: activeRun.name, auto: !!activeRun.auto, macroId: activeRun.macroId };
+}
+
 /* ---------------------------------------------------------------- *
  *  Auto mode — run a macro when a matching page finishes loading    *
  * ---------------------------------------------------------------- */
@@ -572,6 +595,16 @@ function urlMatches(pattern, url) {
   if (!glob.includes('://') && !glob.includes('*')) glob = '*' + glob + '*';
   const rx = new RegExp('^' + glob.split('*').map(escapeRegExp).join('.*') + '$');
   return rx.test(url);
+}
+
+/**
+ * The "ThisURL" token in any URL field stands for the page the run started on, so
+ * a macro that clicks through to another site can switch or navigate back to it.
+ * e.g. `ThisURL` (exact), `ThisURL*` (it and anything under it).
+ */
+function withThisURL(text) {
+  if (!text || !activeRun || !activeRun.thisURL) return text;
+  return String(text).split('ThisURL').join(activeRun.thisURL);
 }
 
 async function maybeAutoRun(tabId, url) {
@@ -735,8 +768,9 @@ async function resolveSwitchTarget(step) {
     // Search every window, not just the run's: a tab the page opened can live in
     // another one, and matching a URL is meant to land on it wherever it is.
     const isNot = step.urlOp === 'isnot';
+    const pattern = withThisURL(step.url || '');
     const matches = (t) => {
-      const m = urlMatches(step.url || '', t.url || '');
+      const m = urlMatches(pattern, t.url || '');
       return isNot ? !m : m;
     };
     const tabs = await chrome.tabs.query({});
@@ -774,7 +808,7 @@ async function runBrowserCommand(step) {
   const tabId = activeRun.tabId;
   const command = step.command || 'newTab';
   const activate = step.activate !== false;
-  const url = step.url && step.url.trim() ? step.url.trim() : undefined;
+  const url = step.url && step.url.trim() ? withThisURL(step.url.trim()) : undefined;
 
   switch (command) {
     case 'newTab': {
@@ -974,6 +1008,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     case 'STOP_MACRO':
       stopRun();
       sendResponse({ ok: true });
+      return true;
+    case 'GET_RUN_STATUS':
+      sendResponse(runStatus());
       return true;
     case 'ELEMENT_PICKED':
       cancelPicker();

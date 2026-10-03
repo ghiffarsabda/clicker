@@ -166,6 +166,26 @@ async function init() {
   applyPanels();
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
   log('Ready. Pick an element to start building.', 'dim');
+
+  // A run can still be alive in the worker (started before this panel opened, or a
+  // loop). Adopt its state so Stop is available instead of the panel showing idle.
+  const syncRun = async () => {
+    const status = await chrome.runtime.sendMessage({ type: 'GET_RUN_STATUS' }).catch(() => null);
+    if (!status) return;
+    if (status.running && !state.running) {
+      log(`Already running "${status.name}"${status.auto ? ' (auto)' : ''} — press Stop to end it.`, 'err');
+    }
+    state.running = !!status.running;
+    renderStatus();
+  };
+  await syncRun();
+  window.addEventListener('focus', syncRun);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) syncRun();
+  });
+
+  const autos = state.macros.filter((m) => m.auto);
+  if (autos.length) log(`Auto mode is on for: ${autos.map((m) => m.name).join(', ')}`, 'dim');
 }
 
 /* ---------------------------------------------------------------- *
@@ -1348,9 +1368,9 @@ function buildStepRow(step, idx, total, path) {
     );
     if (step.target) body.appendChild(matchModeRow(step));
   } else if (step.action === 'navigate') {
-    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    body.appendChild(urlField(step));
   } else if (step.action === 'openTab') {
-    body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+    body.appendChild(urlField(step));
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   } else if (step.action === 'browser') {
     const command = step.command || 'newTab';
@@ -1365,7 +1385,7 @@ function buildStepRow(step, idx, total, path) {
       )
     );
     if (BROWSER_URL_COMMANDS.includes(command)) {
-      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+      body.appendChild(urlField(step));
     }
     if (BROWSER_ACTIVATE_COMMANDS.includes(command)) {
       body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
@@ -1403,7 +1423,7 @@ function buildStepRow(step, idx, total, path) {
           )
         )
       );
-      body.appendChild(fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v }))));
+      body.appendChild(urlField(step));
     }
     body.appendChild(checkboxRow('activate', step.activate !== false, (v) => updateStep(step.id, { activate: v })));
   }
@@ -1539,6 +1559,13 @@ function hintSpan(text) {
   return span;
 }
 
+/** A URL field that also accepts the ThisURL token (the page the macro started on). */
+function urlField(step) {
+  const row = fieldRow('URL', textInput(step.url || '', (v) => updateStep(step.id, { url: v })));
+  row.appendChild(hintSpan('ThisURL = page the macro started on'));
+  return row;
+}
+
 /* Times are stored in milliseconds but shown/edited in seconds. */
 function msToSec(value) {
   const seconds = (Number(value) || 0) / 1000;
@@ -1640,7 +1667,8 @@ function renderStatus() {
   ui.statusDot.classList.toggle('armed', state.armed && !state.running);
 
   ui.runBtn.disabled = state.running;
-  ui.stopBtn.disabled = !state.running;
+  // Never lock Stop out: a run started elsewhere must always be stoppable.
+  ui.stopBtn.disabled = false;
 }
 
 /* ---------------------------------------------------------------- *
