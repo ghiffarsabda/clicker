@@ -237,6 +237,7 @@ async function runMacro(macroId, opts = {}) {
   activeRun = {
     cancelled: false,
     tabId: tab.id,
+    startTabId: tab.id, // the tab the run/loop began on — what "ThisURL" means
     windowId: tab.windowId,
     macroId: macro.id,
     name: macro.name,
@@ -471,7 +472,22 @@ async function runStep(step, depth) {
 
   if (step.action === 'switchTab') {
     const target = await resolveSwitchTarget(step);
-    if (!target) throw new Error('No matching tab to switch to');
+    if (!target) {
+      // "Switch to ThisURL" when that page no longer has a tab (the start tab was
+      // navigated away or closed): go back there by navigating instead of aborting
+      // the pass with "no matching tab".
+      if (String(step.url || '').includes('ThisURL') && step.urlOp !== 'isnot' && activeRun.thisURL) {
+        emit({ type: 'NOTE', text: 'No tab at ThisURL — navigating back to it instead.' });
+        const before = await currentUrl(tabId);
+        await chrome.tabs.update(tabId, { url: activeRun.thisURL });
+        await waitForTabComplete(tabId, before).catch(() => {});
+        await sleep(250);
+        await ensureAgent(tabId);
+        activeRun.tabUrl = await currentUrl(tabId);
+        return;
+      }
+      throw new Error('No matching tab to switch to');
+    }
     if (step.activate !== false) await chrome.tabs.update(target.id, { active: true }).catch(() => {});
     adoptTab(target.id, { reason: 'switch', tab: target });
     await ensureAgent(target.id);
@@ -780,6 +796,19 @@ async function resolveSwitchTarget(step) {
     };
     const tabs = await chrome.tabs.query({});
     const others = tabs.filter((t) => t.id !== activeRun.tabId && !isRestricted(t));
+
+    // "ThisURL" means the tab the run started on, so match it by id, not by URL: that
+    // tab's URL may have changed since (redirect, hash, SPA), and a URL match would
+    // then find nothing and abort the pass ("no matching tab to switch to").
+    if (String(step.url || '').includes('ThisURL') && activeRun.startTabId != null) {
+      if (!isNot) {
+        const startTab = others.find((t) => t.id === activeRun.startTabId);
+        if (startTab) return startTab;
+      } else {
+        const notStart = others.find((t) => t.id !== activeRun.startTabId);
+        if (notStart) return notStart;
+      }
+    }
 
     // Prefer another tab. Failing that, the tab we are already on counts if it
     // satisfies the match — "IS NOT google" while already on the other site
