@@ -137,6 +137,43 @@ function waitForTabComplete(tabId, previousUrl = '', timeout = 25000) {
   });
 }
 
+/**
+ * Wait until the page is fully loaded and quiet: the `load` event has fired and
+ * no resource has finished loading for the settle window ("Quiet"). Late images,
+ * fonts and XHRs are covered; long-lived connections (websockets, streams) are
+ * not resource entries, so they don't hold it up. The page is polled rather than
+ * the content agent blocking, so Stop stays responsive and a mid-wait reload
+ * (which drops the agent) is handled by re-injecting it.
+ */
+async function waitForPageLoad(tabId, step) {
+  const timeout = timeoutValue(step.timeout, 30000);
+  const settle =
+    step.settle === undefined || step.settle === null || step.settle === ''
+      ? 500
+      : Math.max(0, Number(step.settle) || 0);
+  const every = Math.max(100, Number(step.interval) || 250);
+  const started = Date.now();
+
+  for (;;) {
+    if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
+
+    let state = null;
+    try {
+      state = await chrome.tabs.sendMessage(tabId, { type: 'PAGE_LOAD_STATE' });
+    } catch (_) {
+      // Probably mid-navigation — make sure the agent is there for the next poll.
+      await ensureAgent(tabId).catch(() => {});
+    }
+    if (state && state.ok && state.complete && state.idleMs >= settle) return;
+
+    if (timeout > 0 && Date.now() - started > timeout) {
+      if (step.optional) return;
+      throw new Error(`Page did not finish loading within ${secs(timeout)}`);
+    }
+    await cancellableSleep(every);
+  }
+}
+
 /* ---------------------------------------------------------------- *
  *  Picking                                                         *
  * ---------------------------------------------------------------- */
@@ -369,6 +406,10 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'wait') {
+    if (step.mode === 'load') {
+      await waitForPageLoad(tabId, step);
+      return;
+    }
     const ms = waitDuration(step);
     if (step.mode === 'range') emit({ type: 'NOTE', text: `Waited ${secs(ms)} (random ${rangeLabel(step)})` });
     await cancellableSleep(ms); // Stop works during a (possibly long) wait

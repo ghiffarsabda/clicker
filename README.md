@@ -21,8 +21,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Hover` (move
   onto an element and hold), `Scan` (wait for an element), `If` (branches), `Gamble` (chance-based
-  gate), `Wait for change`, `Wait` (fixed or random range), `Scroll` (human-like), `Go to URL`
-  (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide shortcuts).
+  gate), `Wait for change`, `Wait` (fixed, random range, or until the page loads), `Scroll`
+  (human-like), `Go to URL` (navigates in place), `Open tab`, `Switch tab`, `Browser` (browser-wide
+  shortcuts).
 - **Multi-tab** — a step that opens a tab (a click that redirects, `window.open`, or an `Open tab`
   step) moves the rest of the macro onto that new tab, so you can click on site A and continue
   scrolling on site B.
@@ -153,12 +154,17 @@ Two things to know when a tab doesn't move the run:
 
 ## Wait step
 
-The **Wait** step pauses the macro, in one of two modes:
+The **Wait** step pauses the macro, in one of three modes:
 
 - **Fixed** — pause exactly `Sec` seconds.
 - **Random range** — pause a random time between `Min` and `Max` seconds (uniform), so the timing
   isn't a constant, machine-like delay. The chosen value is written to the activity log
   (`Waited 0.812s (random 0.5s–1.5s)`).
+- **Page load** — wait until the page is fully loaded and settles: the `load` event has fired **and**
+  no resource has finished loading for **Quiet** seconds (default `0.5 s`), so slow images, fonts
+  and late XHRs are all in before the next step. **Timeout** (default `30 s`; `0` = forever) gives
+  up — or, with **optional** ticked, continues anyway. Long-lived connections like websockets are not
+  resource entries, so they don't hold it up. Handy right after a step that navigates.
 
 Either order works for Min/Max (they're sorted); Min alone is a fixed pause, Max alone spans
 `0…Max`. A long wait can be interrupted with **Stop**.

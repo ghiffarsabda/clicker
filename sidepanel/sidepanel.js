@@ -1238,18 +1238,24 @@ function buildStepRow(step, idx, total, path) {
       fieldRow('Hold', secondsField(step.ms == null ? 1000 : step.ms, (ms) => updateStep(step.id, { ms })))
     );
   } else if (step.action === 'wait') {
-    const mode = step.mode === 'range' ? 'range' : 'fixed';
+    const mode = step.mode === 'range' ? 'range' : step.mode === 'load' ? 'load' : 'fixed';
     body.appendChild(
       fieldRow(
         'Mode',
         selectInput(
           [
             ['fixed', 'Fixed'],
-            ['range', 'Random range']
+            ['range', 'Random range'],
+            ['load', 'Page load']
           ],
           mode,
           (v) => {
-            updateStep(step.id, { mode: v });
+            const patch = { mode: v };
+            if (v === 'load') {
+              if (step.timeout == null) patch.timeout = 30000;
+              if (step.settle == null) patch.settle = 500;
+            }
+            updateStep(step.id, patch);
             persist();
             renderSteps();
           }
@@ -1267,6 +1273,24 @@ function buildStepRow(step, idx, total, path) {
       const hint = hintSpan('random between Min and Max');
       hint.style.textTransform = 'none';
       body.appendChild(hint);
+    } else if (mode === 'load') {
+      const loadTimeout = fieldRow(
+        'Timeout',
+        secondsField(step.timeout == null ? 30000 : step.timeout, (ms) => updateStep(step.id, { timeout: ms }))
+      );
+      loadTimeout.appendChild(hintSpan('0 = forever'));
+      body.appendChild(loadTimeout);
+
+      const quiet = fieldRow(
+        'Quiet',
+        secondsField(step.settle == null ? 500 : step.settle, (ms) => updateStep(step.id, { settle: ms }))
+      );
+      const quietHint = hintSpan('no new loads for this long');
+      quietHint.style.textTransform = 'none';
+      quiet.appendChild(quietHint);
+      body.appendChild(quiet);
+
+      body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
     } else {
       body.appendChild(
         fieldRow('Sec', secondsField(step.ms || 0, (ms) => updateStep(step.id, { ms })))

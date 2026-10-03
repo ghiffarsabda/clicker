@@ -50,9 +50,36 @@
           sendResponse({ ok: false, error: String((err && err.message) || err) });
         }
         return true;
+      case 'PAGE_LOAD_STATE':
+        sendResponse(pageLoadState());
+        return true;
     }
     return true;
   });
+
+  /**
+   * How loaded-and-quiet the page is, for the Wait step's "page load" mode. The
+   * `load` event must have fired and no resource may have finished for the settle
+   * window; idle time is measured against the most recent resource entry, so late
+   * images, fonts and XHRs keep it "busy" while websockets and streams (which are
+   * not resource entries) do not.
+   */
+  function pageLoadState() {
+    let idleMs = performance.now();
+    try {
+      const entries = performance.getEntriesByType('resource');
+      let lastEnd = 0;
+      for (const e of entries) if (e.responseEnd > lastEnd) lastEnd = e.responseEnd;
+      if (lastEnd) idleMs = performance.now() - lastEnd;
+    } catch (_) {}
+    const fonts = document.fonts && document.fonts.status;
+    return {
+      ok: true,
+      readyState: document.readyState,
+      complete: document.readyState === 'complete' && fonts !== 'loading',
+      idleMs: Math.max(0, Math.round(idleMs))
+    };
+  }
 
   /* ------------------------------------------------------------------ *
    *  Object detection — the "which element do I click" logic            *
