@@ -296,10 +296,11 @@ async function runMacro(macroId, opts = {}) {
   } finally {
     const runTabId = activeRun && activeRun.tabId;
     activeRun = null;
-    // Remember where the run ended so its own navigation can't retrigger it.
-    if (opts.auto && runTabId) {
+    // Remember where the run ended — for manual runs too — so its own navigation
+    // or a refresh can't retrigger auto mode on the page it landed on.
+    if (runTabId) {
       const t = await chrome.tabs.get(runTabId).catch(() => null);
-      if (t && t.url) lastAutoRun.set(runTabId, `${macro.id}::${t.url}`);
+      if (t && t.url) await setAutoRun(runTabId, `${macro.id}::${t.url}`);
     }
   }
 }
@@ -451,7 +452,7 @@ async function runStep(step, depth) {
   }
 
   if (step.action === 'waitChange') {
-    await runWaitChange(step, tabId, depth);
+    await runWaitChange(step, tabId);
     return;
   }
 
@@ -519,7 +520,39 @@ function stopRun() {
  *  Auto mode — run a macro when a matching page finishes loading    *
  * ---------------------------------------------------------------- */
 
-const lastAutoRun = new Map(); // tabId -> `${macroId}::${url}`
+/**
+ * Which macro last ran on which tab+URL, to stop auto mode retriggering itself
+ * (and re-firing on a refresh). Kept in session storage, not memory: an MV3
+ * worker is evicted often, and a lost guard is exactly what let a refresh look
+ * like a new page and start the macro again.
+ */
+const AUTO_RUNS_KEY = 'autoRuns'; // { [tabId]: `${macroId}::${url}` }
+
+async function getAutoRuns() {
+  try {
+    const stored = await chrome.storage.session.get(AUTO_RUNS_KEY);
+    return stored[AUTO_RUNS_KEY] || {};
+  } catch (_) {
+    return {};
+  }
+}
+
+async function setAutoRun(tabId, key) {
+  try {
+    const runs = await getAutoRuns();
+    runs[tabId] = key;
+    await chrome.storage.session.set({ [AUTO_RUNS_KEY]: runs });
+  } catch (_) {}
+}
+
+async function forgetAutoRun(tabId) {
+  try {
+    const runs = await getAutoRuns();
+    if (runs[tabId] === undefined) return;
+    delete runs[tabId];
+    await chrome.storage.session.set({ [AUTO_RUNS_KEY]: runs });
+  } catch (_) {}
+}
 
 function escapeRegExp(s) {
   return s.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
@@ -544,8 +577,9 @@ async function maybeAutoRun(tabId, url) {
   if (!macro) return;
 
   const key = `${macro.id}::${url}`;
-  if (lastAutoRun.get(tabId) === key) return;
-  lastAutoRun.set(tabId, key);
+  const runs = await getAutoRuns();
+  if (runs[tabId] === key) return; // already fired for this tab + URL
+  await setAutoRun(tabId, key);
 
   await sleep(Math.max(0, Number(macro.autoDelay) || 500));
   if (activeRun) return;
@@ -556,7 +590,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab && tab.url) maybeAutoRun(tabId, tab.url);
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => lastAutoRun.delete(tabId));
+chrome.tabs.onRemoved.addListener((tabId) => forgetAutoRun(tabId));
 
 /* ---------------------------------------------------------------- *
  *  Multi-tab control                                               *
@@ -836,18 +870,13 @@ async function readTargetText(tabId, step) {
  * With `sinceLoop` the baseline is the value from the previous loop iteration,
  * which is how you say "if it's still the same page as last time, wait".
  */
-async function runWaitChange(step, tabId, depth) {
+async function runWaitChange(step, tabId) {
   const timeout = timeoutValue(step.timeout, 20000);
   const indefinite = timeout <= 0; // 0 = wait until it changes (or Stop)
   const every = Math.max(100, Number(step.interval) || 300);
   const watchUrl = (step.watch || 'url') === 'url';
-  const inner = step.then || [];
 
-  // Watch the tab the run is actually on — a "while waiting" step may move it.
-  const read = () => {
-    const id = activeRun ? activeRun.tabId : tabId;
-    return watchUrl ? currentUrl(id) : readTargetText(id, step);
-  };
+  const read = () => (watchUrl ? currentUrl(tabId) : readTargetText(tabId, step));
 
   const baseline =
     watchUrl && step.sinceLoop && activeRun.loopMemory.url ? activeRun.loopMemory.url : await read();
@@ -857,13 +886,6 @@ async function runWaitChange(step, tabId, depth) {
     if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
 
     if ((await read()) !== baseline) return;
-
-    // "While waiting" steps: run them each pass and re-check, since they may be
-    // the very thing that flips the URL (a click that navigates) or the text.
-    if (inner.length) {
-      await runSteps(inner, (depth || 0) + 1);
-      if ((await read()) !== baseline) return;
-    }
 
     if (indefinite) {
       await sleep(every);

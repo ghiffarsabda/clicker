@@ -202,7 +202,7 @@ function branchOf(path) {
 }
 
 /** Steps that own then/else branches the runner recurses into. */
-const BRANCH_ACTIONS = { if: true, gamble: true, waitChange: true };
+const BRANCH_ACTIONS = { if: true, gamble: true };
 const isBranchStep = (step) => !!BRANCH_ACTIONS[step && step.action];
 
 /** Depth-first search for a step (walks into If and Gamble branches). */
@@ -1206,7 +1206,6 @@ function buildStepRow(step, idx, total, path) {
       fieldRow('Every', secondsField(step.interval == null ? 300 : step.interval, (ms) => updateStep(step.id, { interval: ms })))
     );
     body.appendChild(checkboxRow('optional', step.optional === true, (v) => updateStep(step.id, { optional: v })));
-    body.appendChild(buildBranch(step, path.concat([idx, 'then']), 'then', 'While waiting'));
   } else if (step.action === 'click' || step.action === 'type' || step.action === 'press' || step.action === 'hover') {
     body.appendChild(buildTargetBlock(step));
     body.appendChild(matchModeRow(step));

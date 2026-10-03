@@ -185,10 +185,6 @@ For loops that should not re-run until the page actually moves on:
     changes"*. Unticked, the baseline is the URL when the step starts.
   - `Timeout` (default 20s) and `Every` (poll interval, default 0.3s). **`0` means wait forever**
     (until Stop). `optional` continues instead of erroring.
-  - **While waiting** — steps you put in this branch run on every poll while the change hasn't
-    happened yet (keep scrolling, click a "load more" button, …), and the wait ends the moment the
-    URL or text changes. The checks run before and after the steps, so a step that itself navigates
-    ends the wait. Leave the branch empty for a plain wait.
 - **If → URL changed** condition — true when the URL differs from the previous loop iteration
   (the first pass counts as changed, so it always proceeds). Use it to guard a whole branch.
 
