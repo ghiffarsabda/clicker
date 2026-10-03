@@ -206,8 +206,13 @@ async function cancelPicker() {
 
 async function runMacro(macroId, opts = {}) {
   if (activeRun) {
-    if (!opts.auto) emit({ type: 'RUN_STATUS', state: 'error', error: 'A macro is already running' });
-    return;
+    // Recover from a wedged run (its tab is gone) instead of refusing forever.
+    const alive = await chrome.tabs.get(activeRun.tabId).catch(() => null);
+    if (alive) {
+      if (!opts.auto) emit({ type: 'RUN_STATUS', state: 'error', error: 'A macro is already running' });
+      return;
+    }
+    activeRun = null;
   }
 
   const { macros = [] } = await chrome.storage.local.get('macros');
@@ -238,7 +243,6 @@ async function runMacro(macroId, opts = {}) {
     follow: macro.followTabs !== false,
     blockFollow: false,
     startedAt: Date.now(),
-    stepStartedAt: Date.now(),
     tabUrl: tab.url || '',
     thisURL: tab.url || '', // the "ThisURL" token: the page the run started on
     loopMemory: {}
@@ -266,6 +270,11 @@ async function runMacro(macroId, opts = {}) {
 
     for (let iteration = 1; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
+      // Its tab closing used to spin error passes forever ("no tab with id"). Stop
+      // cleanly so the worker is freed and Run works again.
+      if (!(await chrome.tabs.get(activeRun.tabId).catch(() => null))) {
+        throw new Error('The tab was closed — run stopped.');
+      }
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
       activeRun.iteration = iteration;
       activeRun.loopTotal = totalLabel;
@@ -274,7 +283,9 @@ async function runMacro(macroId, opts = {}) {
         await runSteps(macro.steps, 0);
       } catch (e) {
         const error = String((e && e.message) || e);
-        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user/.test(error)) throw e;
+        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user|tab was closed/.test(error)) throw e;
+        // A gone tab is fatal — retrying the pass can never succeed.
+        if (/no tab with id/i.test(error)) throw new Error('The tab was closed — run stopped.');
         failedPasses++;
         emit({ type: 'RUN_LOOP_ERROR', error, iteration, total: totalLabel });
       }
@@ -334,7 +345,11 @@ async function runSteps(steps, depth) {
       iterations: activeRun.loopTotal
     });
 
-    activeRun.stepStartedAt = Date.now();
+    // Snapshot existing tabs before a "go to tab it opens" click, so it can only
+    // ever land on a tab this click created.
+    const goTo = step.action === 'click' && step.goTo === true;
+    const beforeIds = goTo ? new Set((await chrome.tabs.query({})).map((t) => t.id)) : null;
+
     const res = await runStep(step, depth || 0);
 
     // Catch a tab this step just opened, so the following step can use it. Only a
@@ -343,7 +358,6 @@ async function runSteps(steps, depth) {
     // adopted instead of the page we're on. A link that targets a new context gets
     // the longer grace, so its fallback doesn't race the page and open a duplicate.
     const opensTab = step.action === 'click' && res && res.link;
-    const goTo = step.action === 'click' && step.goTo === true;
     const grace = !opensTab
       ? goTo
         ? NEW_TAB_GRACE
@@ -351,9 +365,12 @@ async function runSteps(steps, depth) {
       : expectNewTab(step, res)
         ? NEW_TAB_GRACE
         : CLICK_GRACE;
-    const wantsFollow = activeRun.follow || goTo;
-    const adopted = wantsFollow && !activeRun.blockFollow ? await maybeFollowNewTab(grace, goTo) : null;
-    if (step.action === 'click' && wantsFollow && !adopted && res && res.link) {
+
+    let adopted = null;
+    if (goTo) adopted = await goToOpenedTab(beforeIds, grace);
+    else if (activeRun.follow && !activeRun.blockFollow) adopted = await maybeFollowNewTab(grace);
+
+    if (step.action === 'click' && !adopted && res && res.link && (activeRun.follow || goTo)) {
       await openLinkFallback(res.link, res.urlBefore);
     }
   }
@@ -686,8 +703,8 @@ async function waitForNewTabUrl(tabId, timeout = 25000) {
  * not used yet, preferring the tab whose opener is the tab we're on. Returns the
  * record (not yet marked consumed) or null.
  */
-function followCandidate(force) {
-  if (!activeRun || (!activeRun.follow && !force)) return null;
+function followCandidate() {
+  if (!activeRun || !activeRun.follow) return null;
   const since = activeRun.startedAt || 0;
 
   const candidates = recentTabs.filter(
@@ -718,13 +735,13 @@ function followCandidate(force) {
  * Polling ends early the moment an adoptable tab shows up.
  * @returns the tab id that was adopted, or null.
  */
-async function maybeFollowNewTab(waitMs = 0, force = false) {
+async function maybeFollowNewTab(waitMs = 0) {
   const deadline = Date.now() + waitMs;
 
   for (;;) {
-    if (!activeRun || (!activeRun.follow && !force)) return null;
+    if (!activeRun || !activeRun.follow) return null;
 
-    const pick = followCandidate(force);
+    const pick = followCandidate();
     if (pick) {
       pick.consumed = true;
 
@@ -741,6 +758,41 @@ async function maybeFollowNewTab(waitMs = 0, force = false) {
 
     if (Date.now() >= deadline) return null;
     await sleep(Math.min(50, Math.max(1, deadline - Date.now())));
+  }
+}
+
+/**
+ * "go to tab it opens": adopt a tab that did not exist before this step. `beforeIds`
+ * is snapshotted just before the step, so a leftover tab from earlier in the run can
+ * never be mistaken for the one the click opened. Polls until a new tab shows up,
+ * then waits for it to become a real page.
+ */
+async function goToOpenedTab(beforeIds, waitMs) {
+  const deadline = Date.now() + waitMs;
+
+  for (;;) {
+    const tabs = await chrome.tabs.query({});
+    const fresh = tabs.filter(
+      (t) => !beforeIds.has(t.id) && t.id !== activeRun.tabId && !isRestricted(t)
+    );
+    const pick =
+      fresh.find((t) => t.openerTabId === activeRun.tabId) ||
+      fresh.find((t) => t.windowId === activeRun.windowId) ||
+      fresh[0] ||
+      null;
+    if (pick) {
+      const loaded = await waitForNewTabUrl(pick.id).catch(() => null);
+      if (loaded && !isRestricted(loaded)) {
+        markConsumed(pick.id);
+        await ensureAgent(pick.id).catch(() => {});
+        adoptTab(pick.id, { reason: 'follow', tab: loaded });
+        return pick.id;
+      }
+      markConsumed(pick.id); // don't keep retrying a tab we can't use
+    }
+
+    if (Date.now() >= deadline) return null;
+    await sleep(50);
   }
 }
 
