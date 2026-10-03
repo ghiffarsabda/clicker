@@ -737,6 +737,10 @@ function onRuntimeMessage(msg) {
   } else if (msg.type === 'RUN_LOOP') {
     log(`Loop ${msg.iteration}${msg.total ? ' of ' + msg.total : ''}`, 'dim');
 
+  } else if (msg.type === 'RUN_LOOP_ERROR') {
+    const pass = msg.total ? `${msg.iteration}/${msg.total}` : msg.iteration;
+    log(`Pass ${pass} failed — ${msg.error}. Looping again.`, 'err');
+
   } else if (msg.type === 'BRANCH') {
     log(`${msg.result ? '✓ then' : '✗ else'} — ${msg.label}`, 'dim');
 
@@ -756,7 +760,13 @@ function onRuntimeMessage(msg) {
       log(`Running "${msg.name}"${msg.auto ? ' (auto)' : ''}${msg.loop ? ' (looping)' : ''}…`, 'ok');
     } else if (msg.state === 'done') {
       state.running = false;
-      log(msg.loops && msg.loops !== 1 ? `Finished "${msg.name}" after ${msg.loops} loops.` : `Finished "${msg.name}".`, 'ok');
+      const failed = msg.failed ? ` (${msg.failed} pass${msg.failed === 1 ? '' : 'es'} failed)` : '';
+      log(
+        msg.loops && msg.loops !== 1
+          ? `Finished "${msg.name}" after ${msg.loops} loops${failed}.`
+          : `Finished "${msg.name}"${failed}.`,
+        'ok'
+      );
     } else if (msg.state === 'error') {
       state.running = false;
       log(msg.cancelled ? 'Stopped.' : `Error: ${msg.error}`, 'err');

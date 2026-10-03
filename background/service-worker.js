@@ -218,13 +218,26 @@ async function runMacro(macroId, opts = {}) {
     // pass has no "previous loop" to compare against (and proceeds unchanged).
     activeRun.looping = looping;
 
+    // In loop mode a failing step ends that pass instead of aborting the macro —
+    // the next pass starts again from step 1 (e.g. a Scan missed and the Click
+    // after it had no button to hit yet). Stop still wins.
+    let failedPasses = 0;
+
     for (let iteration = 1; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
       activeRun.iteration = iteration;
       activeRun.loopTotal = totalLabel;
 
-      await runSteps(macro.steps, 0);
+      try {
+        await runSteps(macro.steps, 0);
+      } catch (e) {
+        const error = String((e && e.message) || e);
+        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user/.test(error)) throw e;
+        failedPasses++;
+        emit({ type: 'RUN_LOOP_ERROR', error, iteration, total: totalLabel });
+      }
+
       activeRun.loopMemory.url = await currentUrl(activeRun.tabId);
 
       if (iteration < limit && interval > 0) await cancellableSleep(interval);
@@ -235,7 +248,8 @@ async function runMacro(macroId, opts = {}) {
       state: 'done',
       name: macro.name,
       auto: !!opts.auto,
-      loops: looping ? (limit === Infinity ? '∞' : limit) : 1
+      loops: looping ? (limit === Infinity ? '∞' : limit) : 1,
+      failed: failedPasses
     });
   } catch (e) {
     const error = String((e && e.message) || e);

@@ -30,7 +30,9 @@ under the cursor" approach — and turns it into durable selectors that survive 
 - **Auto mode** — bind a macro to a URL pattern and it runs by itself whenever a matching page
   finishes loading. No clicking Run.
 - **Loop mode** — repeat a macro `N` times, or endlessly until you press Stop, with a delay
-  between passes. Macros with it on show a `↻` in the list.
+  between passes. A pass that hits a failing step is abandoned and the next pass starts again from
+  step 1, so a hunting loop keeps going instead of stopping. Macros with it on show a `↻` in the
+  list.
 - **Collapsible side panel** — `Add step`, `Toolbar`, and the `Activity` log fold away. The
   `Toolbar` is itself an accordion holding `Auto mode`, `Loop mode` and `Follow new tabs`, so those
   three collapse into one. Every header shows a live summary while folded
@@ -86,8 +88,10 @@ Turn on **Loop mode** to repeat the whole step list:
 - **Times** — how many passes. `0` means loop until you press **Stop** (or `Alt+Shift+R` again).
 - **Every (ms)** — pause between passes (e.g. wait for the page to settle).
 
-Stop is honoured mid-pass and mid-wait, and a failing step aborts the loop instead of spinning
-forever. Combine with **Auto mode** for continuous background automation on a matching page —
+Stop is honoured mid-pass and mid-wait. If a step fails, that pass ends there and the loop goes
+straight to the next one, starting again from step 1 — so a `Scan → Click` pair that sometimes
+finds no button simply keeps looking. The run ends when the loop count is reached or you press
+**Stop**. Combine with **Auto mode** for continuous background automation on a matching page —
 keep the panel open so the activity log and Stop are at hand.
 
 ## Scroll step
