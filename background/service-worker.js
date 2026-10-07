@@ -23,6 +23,125 @@ const NEW_TAB_GIVEUP = 15000;
 let activeRun = null; // { cancelled, tabId, macroId }
 
 /* ---------------------------------------------------------------- *
+ *  Keep-alive                                                      *
+ * ---------------------------------------------------------------- *
+ * Chrome tears an idle MV3 worker down after ~30s without events, which a long
+ * run (or a long Wait/waitChange) blows straight past. A run is held open by:
+ *   - a self-ping under 30s, so the worker never goes idle while a run is active;
+ *   - a chrome.alarms backstop that survives eviction and wakes the worker;
+ *   - heartbeats from the content agent and the side panel (content/agent.js,
+ *     sidepanel/sidepanel.js) so another live context can wake it too;
+ *   - a persisted run descriptor, so a worker that IS evicted resumes its run
+ *     instead of dying silently and leaving the panel stuck on "running".
+ * Every path is idempotent and swallows its own errors, so keeping the worker
+ * alive can never itself break a run.
+ */
+const KEEPALIVE_ALARM = 'clicker-keepalive';
+const KEEPALIVE_PERIOD_MIN = 0.5; // 30s; Chrome <120 clamps to 1 min — backstop only
+const KEEPALIVE_PING_MS = 20000; // comfortably inside Chrome's ~30s idle window
+const RUN_STATE_KEY = 'runState'; // session storage, survives a worker restart
+
+let keepAliveTimer = null;
+let recovering = false; // guards the worker-start and alarm recovery paths against racing
+let stopRequested = false; // a Stop that must survive a worker restart long enough to cancel a persisted run
+
+/** Touching an extension API resets Chrome's idle-shutdown timer. */
+function keepAlivePing() {
+  try {
+    chrome.runtime.getPlatformInfo().catch(() => {});
+  } catch (_) {}
+}
+
+function startKeepAlive() {
+  keepAlivePing();
+  try {
+    chrome.alarms.create(KEEPALIVE_ALARM, {
+      delayInMinutes: KEEPALIVE_PERIOD_MIN,
+      periodInMinutes: KEEPALIVE_PERIOD_MIN
+    });
+  } catch (_) {}
+  if (keepAliveTimer) return;
+  keepAliveTimer = setInterval(() => {
+    if (activeRun) keepAlivePing();
+    else stopKeepAlive(); // run ended underneath us — stop pinging
+  }, KEEPALIVE_PING_MS);
+}
+
+function stopKeepAlive() {
+  if (keepAliveTimer) {
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+  try {
+    chrome.alarms.clear(KEEPALIVE_ALARM);
+  } catch (_) {}
+}
+
+async function persistRunState() {
+  if (!activeRun) return;
+  try {
+    await chrome.storage.session.set({
+      [RUN_STATE_KEY]: {
+        macroId: activeRun.macroId,
+        name: activeRun.name,
+        auto: !!activeRun.auto,
+        tabId: activeRun.tabId,
+        startTabId: activeRun.startTabId,
+        iteration: activeRun.iteration || 0,
+        startedAt: activeRun.startedAt
+      }
+    });
+  } catch (_) {}
+}
+
+async function clearRunState() {
+  try {
+    await chrome.storage.session.remove(RUN_STATE_KEY);
+  } catch (_) {}
+}
+
+async function getRunState() {
+  try {
+    const stored = await chrome.storage.session.get(RUN_STATE_KEY);
+    return stored[RUN_STATE_KEY] || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * A run was persisted but the worker has no live run: it was evicted mid-run.
+ * Pick the loop back up from the next pass. Loops already restart from step 1
+ * each pass, and the old pass died with the worker, so this can't double-run.
+ */
+async function recoverRun() {
+  if (activeRun || recovering || stopRequested) return false; // one recovery at a time
+  recovering = true;
+  try {
+    const state = await getRunState();
+    // A Stop that woke the worker can land while we were reading — honour it.
+    if (!state || !state.macroId || stopRequested) return false;
+
+    const anchor = state.startTabId != null ? state.startTabId : state.tabId;
+    const tab = anchor != null ? await chrome.tabs.get(anchor).catch(() => null) : null;
+    if (!tab || isRestricted(tab)) {
+      await clearRunState(); // nothing left to run on — don't wedge on a ghost run
+      return false;
+    }
+
+    emit({ type: 'NOTE', text: `Worker restarted — resuming "${state.name || 'macro'}".` });
+    runMacro(state.macroId, {
+      tabId: anchor,
+      auto: !!state.auto,
+      resumeFrom: Number(state.iteration) || 0
+    });
+    return true;
+  } finally {
+    recovering = false;
+  }
+}
+
+/* ---------------------------------------------------------------- *
  *  Lifecycle                                                       *
  * ---------------------------------------------------------------- */
 
@@ -34,6 +153,14 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(() => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+});
+
+// The keepalive alarm fires even after the worker was evicted: keep pinging if a
+// run is live, otherwise pick a persisted run back up.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm || alarm.name !== KEEPALIVE_ALARM) return;
+  if (activeRun) keepAlivePing();
+  else recoverRun();
 });
 
 /* ---------------------------------------------------------------- *
@@ -213,6 +340,7 @@ async function cancelPicker() {
  * ---------------------------------------------------------------- */
 
 async function runMacro(macroId, opts = {}) {
+  stopRequested = false; // a fresh run clears a previous Stop
   if (activeRun) {
     // Recover from a wedged run (its tab is gone) instead of refusing forever.
     const alive = await chrome.tabs.get(activeRun.tabId).catch(() => null);
@@ -273,6 +401,10 @@ async function runMacro(macroId, opts = {}) {
 
   emit({ type: 'RUN_STATUS', state: 'running', macroId: macro.id, name: macro.name, auto: !!opts.auto, loop: looping });
 
+  // Hold the worker awake for the whole run and record it, so an eviction can resume.
+  startKeepAlive();
+  await persistRunState();
+
   try {
     await ensureAgent(tab.id);
 
@@ -285,7 +417,10 @@ async function runMacro(macroId, opts = {}) {
     // after it had no button to hit yet). Stop still wins.
     let failedPasses = 0;
 
-    for (let iteration = 1; iteration <= limit; iteration++) {
+    // Resuming after an eviction picks up at the next pass; a loop always starts a
+    // pass from step 1, so nothing already half-done is repeated.
+    const startAt = Math.max(1, (Number(opts.resumeFrom) || 0) + 1);
+    for (let iteration = startAt; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
 
       // The tab where the run started is the home base for every loop pass
@@ -306,6 +441,9 @@ async function runMacro(macroId, opts = {}) {
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
       activeRun.iteration = iteration;
       activeRun.loopTotal = totalLabel;
+      // Awaited so a slow write can't land after the finally clears it, which would
+      // leave a ghost run that resumes after the user pressed Stop.
+      await persistRunState();
 
       try {
         await runSteps(macro.steps, 0);
@@ -351,8 +489,10 @@ async function runMacro(macroId, opts = {}) {
     const error = String((e && e.message) || e);
     emit({ type: 'RUN_STATUS', state: 'error', error, cancelled: /Stopped by user/.test(error), auto: !!opts.auto });
   } finally {
+    stopKeepAlive();
     const runTabId = activeRun && activeRun.tabId;
     activeRun = null;
+    await clearRunState();
     // Remember where the run ended — for manual runs too — so its own navigation
     // or a refresh can't retrigger auto mode on the page it landed on.
     if (runTabId) {
@@ -603,6 +743,11 @@ async function openLinkFallback(link, urlBefore) {
 }
 
 function stopRun() {
+  // Stop must also cancel a run that was evicted and now exists only as persisted
+  // state — otherwise waking the worker to press Stop would resume it instead.
+  stopRequested = true;
+  stopKeepAlive();
+  clearRunState();
   if (!activeRun) return;
   activeRun.cancelled = true;
   // Interrupt a long step in progress (e.g. a human-like scroll) right away.
@@ -610,9 +755,13 @@ function stopRun() {
 }
 
 /** Snapshot of the current run, so a panel that opens mid-run can show Stop. */
-function runStatus() {
-  if (!activeRun) return { running: false };
-  return { running: true, name: activeRun.name, auto: !!activeRun.auto, macroId: activeRun.macroId };
+async function runStatus() {
+  if (activeRun) return { running: true, name: activeRun.name, auto: !!activeRun.auto, macroId: activeRun.macroId };
+  // The worker may have just restarted for an evicted run — report it from the
+  // persisted descriptor so Stop stays reachable and the panel isn't falsely idle.
+  const state = await getRunState();
+  if (state && state.macroId) return { running: true, name: state.name, auto: !!state.auto, macroId: state.macroId };
+  return { running: false };
 }
 
 /* ---------------------------------------------------------------- *
@@ -1097,7 +1246,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({ ok: true });
       return true;
     case 'GET_RUN_STATUS':
-      sendResponse(runStatus());
+      runStatus().then(sendResponse);
+      return true;
+    case 'KEEPALIVE':
+      sendResponse({ ok: true, running: !!activeRun });
       return true;
     case 'ELEMENT_PICKED':
       cancelPicker();
@@ -1124,3 +1276,7 @@ chrome.commands.onCommand.addListener(async (command) => {
     armPicker('click');
   }
 });
+
+// Worker start: if a run was persisted, the previous worker was evicted mid-run.
+// Recover it instead of leaving the panel stuck on "running" with nothing alive.
+recoverRun();

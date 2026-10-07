@@ -27,6 +27,7 @@
         sendResponse({ ok: true });
         return true;
       case 'EXECUTE_STEP':
+        startHeartbeat();
         executeStep(msg.step)
           .then((r) => sendResponse(r))
           .catch((err) => sendResponse({ ok: false, error: String((err && err.message) || err) }));
@@ -56,6 +57,26 @@
     }
     return true;
   });
+
+  // Heartbeat: only a run needs the worker kept alive, so this starts on the first
+  // step we execute and stops once the worker reports no run. Every 20s is safely
+  // inside Chrome's ~30s idle window, and it re-wakes the worker after an eviction.
+  let heartbeat = null;
+  function stopHeartbeat() {
+    if (heartbeat) {
+      clearInterval(heartbeat);
+      heartbeat = null;
+    }
+  }
+  function startHeartbeat() {
+    if (heartbeat) return;
+    heartbeat = setInterval(async () => {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'KEEPALIVE' });
+        if (res && res.ok && !res.running) stopHeartbeat();
+      } catch (_) {}
+    }, 20000);
+  }
 
   /**
    * How loaded-and-quiet the page is, for the Wait step's "page load" mode. The

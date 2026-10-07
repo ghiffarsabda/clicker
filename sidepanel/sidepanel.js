@@ -186,6 +186,15 @@ async function init() {
 
   const autos = state.macros.filter((m) => m.auto);
   if (autos.length) log(`Auto mode is on for: ${autos.map((m) => m.name).join(', ')}`, 'dim');
+
+  // Heartbeat: while a run is in flight, wake the worker every 20s so an idle MV3
+  // worker can't be torn down mid-run. Skipped when idle, so the worker can sleep.
+  setInterval(() => {
+    if (!state.running) return;
+    try {
+      chrome.runtime.sendMessage({ type: 'KEEPALIVE' }).catch(() => {});
+    } catch (_) {}
+  }, 20000);
 }
 
 /* ---------------------------------------------------------------- *

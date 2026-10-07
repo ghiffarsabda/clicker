@@ -95,8 +95,10 @@ finds no button simply keeps looking. The run ends when the loop count is reache
 **Stop**. Every loop iteration is anchored to the initial tab where the run started: if previous
 steps followed or opened other tabs, the run returns to the start tab for the next pass, closed
 secondary tabs auto-recover back to the start tab without throwing "tab not found" crashes, and
-a closed secondary tab does not stall the loop. Combine with **Auto mode** for continuous background
-automation on a matching page —
+a closed secondary tab does not stall the loop. The background worker is held awake for the whole
+run (self-ping, page/panel heartbeats, and an alarm backstop), and if Chrome ever evicts it anyway
+the run is resumed on its start tab. Combine with **Auto mode** for continuous background automation
+on a matching page —
 keep the panel open so the activity log and Stop are at hand.
 
 ## Hover step
