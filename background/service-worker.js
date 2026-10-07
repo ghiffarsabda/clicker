@@ -122,7 +122,9 @@ async function ensureAgent(tabId) {
   await chrome.scripting
     .insertCSS({ target: { tabId }, files: ['content/agent.css'] })
     .catch(() => {});
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['content/agent.js'] });
+  await chrome.scripting
+    .executeScript({ target: { tabId }, files: ['content/agent.js'] })
+    .catch(() => {});
 }
 
 /**
@@ -285,11 +287,22 @@ async function runMacro(macroId, opts = {}) {
 
     for (let iteration = 1; iteration <= limit; iteration++) {
       if (!activeRun || activeRun.cancelled) throw new Error('Stopped by user');
-      // Its tab closing used to spin error passes forever ("no tab with id"). Stop
-      // cleanly so the worker is freed and Stop/Run work again.
-      if (!(await chrome.tabs.get(activeRun.tabId).catch(() => null))) {
-        throw new Error('The tab was closed — run stopped.');
+
+      // The tab where the run started is the home base for every loop pass
+      const startTab = activeRun.startTabId
+        ? await chrome.tabs.get(activeRun.startTabId).catch(() => null)
+        : null;
+      if (!startTab) {
+        throw new Error('The start tab was closed — run stopped.');
       }
+
+      // If a previous pass followed another tab, return to the start tab for the new pass
+      if (activeRun.tabId !== activeRun.startTabId) {
+        adoptTab(activeRun.startTabId, { reason: 'switch', tab: startTab });
+        await chrome.tabs.update(activeRun.startTabId, { active: true }).catch(() => {});
+        await ensureAgent(activeRun.startTabId).catch(() => {});
+      }
+
       if (looping) emit({ type: 'RUN_LOOP', iteration, total: totalLabel });
       activeRun.iteration = iteration;
       activeRun.loopTotal = totalLabel;
@@ -298,16 +311,32 @@ async function runMacro(macroId, opts = {}) {
         await runSteps(macro.steps, 0);
       } catch (e) {
         const error = String((e && e.message) || e);
-        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user|tab was closed/.test(error)) throw e;
-        // A gone tab is fatal — retrying the pass can never succeed.
-        if (/no tab with id/i.test(error)) throw new Error('The tab was closed — run stopped.');
+        if (!looping || !activeRun || activeRun.cancelled || /Stopped by user/.test(error)) throw e;
+        // If the start tab itself is gone, retrying can never succeed
+        const startTabAlive = activeRun.startTabId
+          ? await chrome.tabs.get(activeRun.startTabId).catch(() => null)
+          : null;
+        if (!startTabAlive) {
+          throw new Error('The start tab was closed — run stopped.');
+        }
         failedPasses++;
         emit({ type: 'RUN_LOOP_ERROR', error, iteration, total: totalLabel });
       }
 
-      activeRun.loopMemory.url = await currentUrl(activeRun.tabId);
+      activeRun.loopMemory.url = await currentUrl(activeRun.startTabId || activeRun.tabId);
 
-      if (iteration < limit && interval > 0) await cancellableSleep(interval);
+      // Return to start tab before interval pause so the page is ready for the next pass
+      if (iteration < limit) {
+        const currentStartTab = activeRun.startTabId
+          ? await chrome.tabs.get(activeRun.startTabId).catch(() => null)
+          : null;
+        if (currentStartTab && activeRun.tabId !== activeRun.startTabId) {
+          adoptTab(activeRun.startTabId, { reason: 'switch', tab: currentStartTab });
+          await chrome.tabs.update(activeRun.startTabId, { active: true }).catch(() => {});
+          await ensureAgent(activeRun.startTabId).catch(() => {});
+        }
+        if (interval > 0) await cancellableSleep(interval);
+      }
     }
 
     emit({
@@ -421,8 +450,22 @@ async function evaluateCondition(condition, tabId) {
 }
 
 async function runStep(step, depth) {
-  const tabId = activeRun && activeRun.tabId;
+  let tabId = activeRun && activeRun.tabId;
   if (!tabId) throw new Error('No active tab');
+
+  // Verify the tab is alive. If a secondary/followed tab vanished, self-heal back to the start tab
+  const alive = await chrome.tabs.get(tabId).catch(() => null);
+  if (!alive) {
+    const startTab = activeRun.startTabId ? await chrome.tabs.get(activeRun.startTabId).catch(() => null) : null;
+    if (startTab) {
+      adoptTab(activeRun.startTabId, { reason: 'switch', tab: startTab });
+      await chrome.tabs.update(activeRun.startTabId, { active: true }).catch(() => {});
+      await ensureAgent(activeRun.startTabId).catch(() => {});
+      tabId = activeRun.startTabId;
+    } else {
+      throw new Error('The tab was closed — run stopped.');
+    }
+  }
 
   if (step.action === 'if') {
     const ok = await evaluateCondition(step.condition, tabId);
@@ -552,7 +595,7 @@ async function openLinkFallback(link, urlBefore) {
     return;
   }
 
-  await chrome.tabs.update(activeRun.tabId, { url: link.href });
+  await chrome.tabs.update(activeRun.tabId, { url: link.href }).catch(() => {});
   await waitForTabComplete(activeRun.tabId, urlBefore || '');
   await sleep(250);
   await ensureAgent(activeRun.tabId);
