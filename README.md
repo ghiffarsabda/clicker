@@ -247,6 +247,10 @@ immediately, then keep re-checking:
 - **`Scan`** on a `Click` / `Type` / `Key` step — that step retries *its own* element for the
   given seconds before failing. `0` (the default) keeps the old fail-fast behaviour.
 
+During repetitive loops, element resolution automatically ignores disabled or inactive buttons
+left behind by prior passes, breaks ties in favor of interactive and on-screen elements, and
+falls back to recorded text labels if dynamic classes or IDs drift.
+
 Pair a Scan with a loop for a recurring hunt: `Scan(optional) → Click → Wait` around the whole
 thing, looping until you press Stop.
 

@@ -87,6 +87,11 @@
 
   function isVisible(el) {
     if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+    if (typeof el.checkVisibility === 'function') {
+      try {
+        if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+      } catch (_) {}
+    }
     const r = el.getBoundingClientRect();
     if (r.width < 1 || r.height < 1) return false;
     const st = getComputedStyle(el);
@@ -276,38 +281,81 @@
     return best ? best.el : null;
   }
 
+  /** Check if an element can be interacted with (not disabled or pointer-blocked). */
+  function isInteractive(el) {
+    if (!el) return false;
+    if (el.disabled) return false;
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return false;
+    if (el.classList && el.classList.contains('disabled')) return false;
+    try {
+      if (getComputedStyle(el).pointerEvents === 'none') return false;
+    } catch (_) {}
+    return true;
+  }
+
+  /** Check if an element is currently in the visible browser viewport. */
+  function inViewport(el) {
+    if (!el || typeof el.getBoundingClientRect !== 'function') return false;
+    const r = el.getBoundingClientRect();
+    return (
+      r.bottom > 0 &&
+      r.right > 0 &&
+      r.top < (window.innerHeight || document.documentElement.clientHeight) &&
+      r.left < (window.innerWidth || document.documentElement.clientWidth)
+    );
+  }
+
   /** How well an element matches the recorded text-independent signature. */
-  function scoreBySignature(el, sig) {
+  function scoreBySignature(el, sig, target) {
     if (!sig) return 0;
     let score = 0;
     if (el.tagName.toLowerCase() === sig.tag) score += 1;
     if (sig.role && el.getAttribute('role') === sig.role) score += 2;
     if (sig.type && el.getAttribute('type') === sig.type) score += 1;
     if (sig.classes && sig.classes.length) {
-      const cls = new Set(String(el.className || '').split(/\s+/).filter(Boolean));
+      const classStr = typeof el.className === 'string' ? el.className : (el.className && el.className.baseVal) || '';
+      const cls = new Set(classStr.split(/\s+/).filter(Boolean));
       score += sig.classes.filter((c) => cls.has(c)).length * 2;
     }
     for (const [k, v] of Object.entries(sig.attrs || {})) {
       if (el.getAttribute(k) === v) score += 1;
     }
-    return score;
+
+    // Reward interactive and on-screen elements; penalize disabled elements left over from prior passes
+    if (isInteractive(el)) score += 3;
+    else score -= 5;
+    if (inViewport(el)) score += 2;
+
+    // Reward matching the original text/label if recorded
+    const textCand = target && Array.isArray(target.fallbacks) ? target.fallbacks.find((f) => f && f.kind === 'text') : null;
+    if (textCand && textCand.value) {
+      const norm = (s) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+      const txt = norm(el.innerText || el.textContent);
+      if (txt === norm(textCand.value)) score += 3;
+    }
+
+    return Math.max(0, score);
   }
 
   /**
    * Last resort: hunt the page for the best structural lookalike of the target.
-   * Refuses tag-only matches and ties, rather than clicking a possibly-wrong element.
+   * Breaks ties in favor of interactive elements rather than giving up.
    */
-  function huntBySignature(sig) {
+  function huntBySignature(sig, target) {
     if (!sig || !sig.tag) return null;
 
     const scored = Array.from(document.querySelectorAll(sig.tag))
       .filter(isVisible)
-      .map((el) => ({ el, score: scoreBySignature(el, sig) }))
+      .map((el) => ({ el, score: scoreBySignature(el, sig, target) }))
       .sort((a, b) => b.score - a.score);
 
     if (scored.length === 0) return null;
     if (scored[0].score < 2) return null; // a bare tag is too weak to act on
-    if (scored[1] && scored[1].score === scored[0].score) return null; // ambiguous — refuse
+    if (scored[1] && scored[1].score === scored[0].score) {
+      // Tied scores: pick the top interactive candidate if its score is solid
+      if (isInteractive(scored[0].el) && scored[0].score >= 3) return scored[0].el;
+      return null;
+    }
     return scored[0].el;
   }
 
@@ -333,9 +381,14 @@
         if (matches.length === 1) return matches[0];
         if (matches.length > 1) {
           const scored = matches
-            .map((el) => ({ el, score: scoreBySignature(el, target.signature) }))
+            .map((el) => ({ el, score: scoreBySignature(el, target.signature, target) }))
             .sort((a, b) => b.score - a.score);
-          if (scored[0].score > 0 && scored[0].score > (scored[1] ? scored[1].score : 0)) return scored[0].el;
+          if (scored[0].score > 0) {
+            // Decisive winner
+            if (scored[0].score > (scored[1] ? scored[1].score : 0)) return scored[0].el;
+            // On a tie, pick the interactive winner rather than refusing
+            if (isInteractive(scored[0].el)) return scored[0].el;
+          }
         }
       } else if (c.type === 'text') {
         const el = findByText(c.value);
@@ -343,7 +396,17 @@
       }
     }
 
-    return huntBySignature(target.signature);
+    // Safety net: if structure couldn't find a unique match and textMatch wasn't explicitly checked,
+    // try the recorded label/text fallback before giving up.
+    if (!opts.textMatch) {
+      const textCand = (target.fallbacks || []).find((f) => f && f.kind === 'text');
+      if (textCand && textCand.value) {
+        const el = findByText(textCand.value);
+        if (el && isVisible(el) && isInteractive(el)) return el;
+      }
+    }
+
+    return huntBySignature(target.signature, target);
   }
 
   /* ------------------------------------------------------------------ *
@@ -826,6 +889,15 @@
         if (el) return el;
       }
     }
+
+    if (!opts.textMatch) {
+      const textCand = (target.fallbacks || []).find((f) => f && f.kind === 'text');
+      if (textCand && textCand.value) {
+        const el = findByText(textCand.value);
+        if (el) return el;
+      }
+    }
+
     return null;
   }
 
