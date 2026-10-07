@@ -251,7 +251,12 @@ immediately, then keep re-checking:
   shows up, unless **optional** is ticked, in which case the run continues (handy inside a loop
   that keeps hunting).
 - **`Scan`** on a `Click` / `Type` / `Key` step — that step retries *its own* element for the
-  given seconds before failing. `0` (the default) keeps the old fail-fast behaviour.
+  given seconds before failing. `0` (the default) still retries briefly (~1.5s) so a momentary miss
+  doesn't fail the pass.
+
+Resolution stays strict: when several elements match, it acts only if the recorded role/label — or a
+single enabled candidate among otherwise-identical controls — isolates one, and otherwise refuses
+rather than click the wrong control. The reason for a refusal is written to the activity log.
 
 Pair a Scan with a loop for a recurring hunt: `Scan(optional) → Click → Wait` around the whole
 thing, looping until you press Stop.

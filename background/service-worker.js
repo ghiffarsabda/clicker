@@ -710,6 +710,12 @@ async function runStep(step, depth) {
     throw new Error('Could not reach the page — it may have navigated, closed, or reloaded');
   }
   if (!res || !res.ok) throw new Error((res && res.error) || `Step failed: ${step.action}`);
+  // An optional Scan that finds nothing used to vanish silently; surface the page's
+  // resolution trace so a skipped step is visible in the log.
+  if (step.action === 'scan' && res.found === false) {
+    const sel = (step.target && step.target.selector) || 'element';
+    emit({ type: 'NOTE', text: `Scan found nothing for ${sel}${res.diag ? ' \u2014 ' + res.diag : ''}` });
+  }
   return Object.assign({}, res, { urlBefore });
 }
 

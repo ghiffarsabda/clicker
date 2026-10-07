@@ -10,6 +10,13 @@
 
   let picker = null;
   let pickMode = 'click';
+  let lastTrace = []; // why the most recent resolution matched or refused — surfaced in the run log
+
+  const clip = (s, n) => {
+    const t = String(s == null ? '' : s);
+    return t.length > n ? t.slice(0, n) + '\u2026' : t;
+  };
+  const traceText = () => (lastTrace.length ? ' \u2014 ' + lastTrace.join('; ') : '');
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg || !msg.type) return;
@@ -79,6 +86,25 @@
   }
 
   /**
+   * When a resource last finished. Tracked with a PerformanceObserver (seeded from
+   * the buffered entries) because `getEntriesByType('resource')` stops recording once
+   * its 250-entry buffer is full — after which the old "max responseEnd" freezes and a
+   * long-lived page looks permanently idle, letting Wait(load) return before late
+   * images/XHRs have actually finished.
+   */
+  let lastResourceAt = 0;
+  try {
+    const Obs =
+      (typeof PerformanceObserver !== 'undefined' && PerformanceObserver) ||
+      (typeof window !== 'undefined' && window.PerformanceObserver);
+    if (Obs) {
+      new Obs((list) => {
+        for (const e of list.getEntries()) if (e.responseEnd > lastResourceAt) lastResourceAt = e.responseEnd;
+      }).observe({ type: 'resource', buffered: true });
+    }
+  } catch (_) {}
+
+  /**
    * How loaded-and-quiet the page is, for the Wait step's "page load" mode. The
    * `load` event must have fired and no resource may have finished for the settle
    * window; idle time is measured against the most recent resource entry, so late
@@ -86,13 +112,15 @@
    * not resource entries) do not.
    */
   function pageLoadState() {
-    let idleMs = performance.now();
+    let lastEnd = lastResourceAt;
     try {
       const entries = performance.getEntriesByType('resource');
-      let lastEnd = 0;
-      for (const e of entries) if (e.responseEnd > lastEnd) lastEnd = e.responseEnd;
-      if (lastEnd) idleMs = performance.now() - lastEnd;
+      // Trust the buffer only while it isn't saturated; once full it stops recording.
+      if (entries.length < 250) {
+        for (const e of entries) if (e.responseEnd > lastEnd) lastEnd = e.responseEnd;
+      }
     } catch (_) {}
+    const idleMs = lastEnd ? performance.now() - lastEnd : performance.now();
     const fonts = document.fonts && document.fonts.status;
     return {
       ok: true,
@@ -203,6 +231,61 @@
     };
   }
 
+  /** Normalize a label for comparison. */
+  const normLabel = (s) => String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toLowerCase();
+
+  /** The ARIA role an element exposes, explicit or implied by its tag. */
+  function accessibleRole(el) {
+    const explicit = el.getAttribute && el.getAttribute('role');
+    if (explicit) return explicit.trim().toLowerCase();
+    const tag = el.tagName.toLowerCase();
+    if (tag === 'button' || tag === 'summary') return 'button';
+    if (tag === 'a') return el.hasAttribute && el.hasAttribute('href') ? 'link' : null;
+    if (tag === 'input') {
+      const t = (el.getAttribute('type') || 'text').toLowerCase();
+      if (t === 'submit' || t === 'button' || t === 'reset' || t === 'image') return 'button';
+      if (t === 'checkbox') return 'checkbox';
+      if (t === 'radio') return 'radio';
+      return 'textbox';
+    }
+    if (tag === 'select') return 'combobox';
+    if (tag === 'textarea') return 'textbox';
+    return null;
+  }
+
+  /** The accessible name a screen reader would announce — what a user calls this control. */
+  function accessibleName(el) {
+    if (!el || !el.getAttribute) return '';
+    const aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) return normLabel(aria);
+    const labelledby = el.getAttribute('aria-labelledby');
+    if (labelledby && document.getElementById) {
+      const text = labelledby
+        .split(/\s+/)
+        .map((id) => document.getElementById(id))
+        .filter(Boolean)
+        .map((n) => n.innerText || n.textContent || '')
+        .join(' ')
+        .trim();
+      if (text) return normLabel(text);
+    }
+    const title = el.getAttribute('title');
+    if (title && title.trim()) return normLabel(title);
+    const text = (el.innerText || el.textContent || '').trim();
+    if (text) return normLabel(text);
+    const ph = el.getAttribute('placeholder');
+    if (ph && ph.trim()) return normLabel(ph);
+    return '';
+  }
+
+  /** Disabled controls still match a selector but are never what you meant to act on. */
+  function isActionable(el) {
+    if (!el) return false;
+    if (el.disabled) return false;
+    if (el.getAttribute && el.getAttribute('aria-disabled') === 'true') return false;
+    return true;
+  }
+
   /**
    * Build an ordered list of candidate selectors.
    * Structure-based (text-independent) candidates come first so a control keeps
@@ -273,6 +356,9 @@
       fallbacks: found,
       label: describe(el),
       tag,
+      // Recorded "identity" — what disambiguates this control from lookalikes later.
+      role: accessibleRole(el),
+      name: accessibleName(el).slice(0, 80),
       signature
     };
   }
@@ -317,23 +403,82 @@
   /**
    * Last resort: hunt the page for the best structural lookalike of the target.
    * Refuses tag-only matches and ties, rather than clicking a possibly-wrong element.
+   * `trace` (optional) records why it matched or refused, for the run log.
    */
-  function huntBySignature(sig) {
-    if (!sig || !sig.tag) return null;
+  function huntBySignature(sig, trace) {
+    const note = (s) => {
+      if (trace && trace.length < 12) trace.push(s);
+    };
+    if (!sig || !sig.tag) {
+      note('hunt: no signature recorded');
+      return null;
+    }
 
     const scored = Array.from(document.querySelectorAll(sig.tag))
       .filter(isVisible)
       .map((el) => ({ el, score: scoreBySignature(el, sig) }))
       .sort((a, b) => b.score - a.score);
 
-    if (scored.length === 0) return null;
-    if (scored[0].score < 2) return null; // a bare tag is too weak to act on
-    if (scored[1] && scored[1].score === scored[0].score) return null; // ambiguous — refuse
+    if (scored.length === 0) {
+      note(`hunt <${sig.tag}>: no visible elements`);
+      return null;
+    }
+    if (scored[0].score < 2) {
+      note(`hunt <${sig.tag}>: best score ${scored[0].score} too weak`);
+      return null; // a bare tag is too weak to act on
+    }
+    if (scored[1] && scored[1].score === scored[0].score) {
+      note(`hunt <${sig.tag}>: ${scored.length} tied at ${scored[0].score} \u2014 refused`);
+      return null; // ambiguous — refuse
+    }
+    note(`hunt <${sig.tag}>: best score ${scored[0].score} \u2014 matched`);
     return scored[0].el;
   }
 
+  /**
+   * Break an ambiguous tie using ONLY what was recorded when the target was picked.
+   * It can only ever return one of `matches` (elements the selector already matched),
+   * and only when the recorded identity isolates exactly one — otherwise it returns
+   * null and the caller keeps refusing. It never invents a winner from generic cues.
+   */
+  function narrowByRecordedIdentity(matches, target) {
+    if (target.name) {
+      const byName = matches.filter((el) => accessibleName(el) === target.name);
+      if (byName.length === 1) return { el: byName[0], by: 'recorded label' };
+      const enabled = byName.filter(isActionable);
+      if (byName.length > 1 && enabled.length === 1) return { el: enabled[0], by: 'recorded label + only enabled' };
+      return null; // a label was recorded but doesn't isolate one element — refuse
+    }
+    if (target.role) {
+      const byRole = matches.filter((el) => accessibleRole(el) === target.role);
+      if (byRole.length === 1) return { el: byRole[0], by: 'recorded role' };
+      const enabled = byRole.filter(isActionable);
+      if (byRole.length > 1 && enabled.length === 1) return { el: enabled[0], by: 'recorded role + only enabled' };
+    }
+    return null;
+  }
+
+  /**
+   * Resolve a picked target to a live element. Walks the recorded candidates in
+   * order and, for each, records what it saw into `lastTrace` — so a failure (or a
+   * silent optional-scan miss) can say exactly which candidates matched how many
+   * nodes and why none of them won. Refuses on ambiguity rather than guessing.
+   */
   function resolveTarget(target, opts = {}) {
-    if (!target) return null;
+    const trace = [];
+    const note = (s) => {
+      if (trace.length < 12) trace.push(s);
+    };
+    const done = (el) => {
+      lastTrace = trace;
+      return el;
+    };
+
+    if (!target) {
+      note('no target recorded');
+      lastTrace = trace;
+      return null;
+    }
 
     const candidates =
       Array.isArray(target.fallbacks) && target.fallbacks.length
@@ -342,29 +487,61 @@
 
     for (const c of candidates) {
       if (!c || !c.value) continue;
-      if (c.kind === 'text' && !opts.textMatch) continue; // structure-only unless asked
+      if (c.kind === 'text' && !opts.textMatch) {
+        note(`text "${clip(c.value, 40)}" skipped (textMatch off)`); // structure-only unless asked
+        continue;
+      }
 
       if (c.type === 'css') {
         let matches;
         try {
-          matches = Array.from(document.querySelectorAll(c.value)).filter(isVisible);
+          matches = Array.from(document.querySelectorAll(c.value));
         } catch (_) {
+          note(`css "${clip(c.value, 60)}": invalid selector`);
           continue;
         }
-        if (matches.length === 1) return matches[0];
-        if (matches.length > 1) {
-          const scored = matches
+        const visible = matches.filter(isVisible);
+        if (visible.length === 1) {
+          note(`css "${clip(c.value, 60)}": 1 of ${matches.length} visible \u2014 matched`);
+          return done(visible[0]);
+        }
+        if (visible.length > 1) {
+          const scored = visible
             .map((el) => ({ el, score: scoreBySignature(el, target.signature) }))
             .sort((a, b) => b.score - a.score);
-          if (scored[0].score > 0 && scored[0].score > (scored[1] ? scored[1].score : 0)) return scored[0].el;
+          const win = scored[0].score > 0 && scored[0].score > (scored[1] ? scored[1].score : 0);
+          if (win) {
+            note(`css "${clip(c.value, 60)}": ${visible.length} visible, strict winner \u2014 matched`);
+            return done(scored[0].el);
+          }
+          // No strict winner: narrow by the recorded identity only — never guess.
+          const picked = narrowByRecordedIdentity(visible, target);
+          if (picked) {
+            note(`css "${clip(c.value, 60)}": ${visible.length} visible \u2014 resolved by ${picked.by}`);
+            return done(picked.el);
+          }
+          note(
+            `css "${clip(c.value, 60)}": ${visible.length} visible, scores ${scored
+              .slice(0, 3)
+              .map((s) => s.score)
+              .join('/')} \u2014 no strict winner`
+          );
+        } else {
+          note(`css "${clip(c.value, 60)}": 0 of ${matches.length} visible`);
         }
       } else if (c.type === 'text') {
         const el = findByText(c.value);
-        if (el && isVisible(el)) return el;
+        if (el && isVisible(el)) {
+          note(`text "${clip(c.value, 40)}": matched`);
+          return done(el);
+        }
+        note(`text "${clip(c.value, 40)}": no visible match`);
       }
     }
 
-    return huntBySignature(target.signature);
+    const hunted = huntBySignature(target.signature, trace);
+    lastTrace = trace;
+    return hunted;
   }
 
   /* ------------------------------------------------------------------ *
@@ -789,10 +966,18 @@
   }
 
   /** Find a target, optionally scanning for it first when the step asks for it. */
+  // A `Scan` of 0 keeps the old "look once" intent, but a single transient miss
+  // (mid-render or mid-animation) shouldn't fail the pass — so it still retries briefly.
+  const DEFAULT_LOCATE_SCAN_MS = 1500;
+
   async function locate(step) {
     const opts = { textMatch: !!step.textMatch };
     const scanMs = Math.max(0, Number(step.scanMs) || 0);
-    if (scanMs <= 0) return resolveTarget(step.target, opts);
+    if (scanMs <= 0) {
+      const el = resolveTarget(step.target, opts);
+      if (el) return el;
+      return waitForTarget(step.target, DEFAULT_LOCATE_SCAN_MS, step.scanInterval, opts);
+    }
     return waitForTarget(step.target, scanMs, step.scanInterval, opts);
   }
 
@@ -804,7 +989,7 @@
     const duration = Math.max(0, Number(step.duration) || 0);
     if (step.target) {
       const el = await locate(step);
-      if (!el) throw new Error('Element not found: ' + describeTarget(step.target));
+      if (!el) throw new Error('Element not found: ' + describeTarget(step.target) + traceText());
       await scrollToElement(el, duration);
       return;
     }
@@ -942,16 +1127,16 @@
       if (!el && !step.optional) {
         const seconds = Math.round((timeout / 1000) * 1000) / 1000;
         throw new Error(
-          timeout > 0
+          (timeout > 0
             ? `Scanned for ${seconds}s but never found: ${describeTarget(step.target)}`
-            : `Stopped before the element appeared: ${describeTarget(step.target)}`
+            : `Stopped before the element appeared: ${describeTarget(step.target)}`) + traceText()
         );
       }
-      return { ok: true, found: !!el };
+      return { ok: true, found: !!el, diag: lastTrace.join('; ') };
     }
 
     const el = await locate(step);
-    if (!el) throw new Error('Element not found: ' + describeTarget(step.target));
+    if (!el) throw new Error('Element not found: ' + describeTarget(step.target) + traceText());
 
     el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
     await sleep(60);
