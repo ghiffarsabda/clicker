@@ -1240,7 +1240,8 @@ async function readTargetText(tabId, step) {
     const res = await chrome.tabs.sendMessage(tabId, {
       type: 'READ_TEXT',
       target: step.target,
-      textMatch: !!step.textMatch
+      textMatch: !!step.textMatch,
+      textOptions: step.textOptions
     });
     return res && res.ok ? String(res.text == null ? '' : res.text) : '';
   } catch (_) {

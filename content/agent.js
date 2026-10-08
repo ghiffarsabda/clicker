@@ -52,7 +52,9 @@
         return true;
       case 'READ_TEXT':
         try {
-          const el = resolveTarget(msg.target, { textMatch: !!msg.textMatch }) || resolveAny(msg.target, { textMatch: !!msg.textMatch });
+          const el =
+            resolveTarget(msg.target, { textMatch: !!msg.textMatch, textOptions: msg.textOptions }) ||
+            resolveAny(msg.target, { textMatch: !!msg.textMatch, textOptions: msg.textOptions });
           sendResponse({ ok: true, text: el ? (el.innerText || el.textContent || '').trim().replace(/\s+/g, ' ') : null });
         } catch (err) {
           sendResponse({ ok: false, error: String((err && err.message) || err) });
@@ -363,6 +365,24 @@
     };
   }
 
+  /**
+   * The user-supplied possible texts for a target (a button's label can change
+   * between runs), trimmed and de-duplicated. Only used when matching by text.
+   */
+  function textValues(opts) {
+    if (!opts || !opts.textMatch || !Array.isArray(opts.textOptions)) return [];
+    const seen = new Set();
+    const out = [];
+    for (const raw of opts.textOptions) {
+      const t = String(raw == null ? '' : raw).trim();
+      if (t && !seen.has(t.toLowerCase())) {
+        seen.add(t.toLowerCase());
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
   function findByText(text) {
     const norm = (s) => (s || '').trim().replace(/\s+/g, ' ').toLowerCase();
     const wanted = norm(text);
@@ -484,6 +504,7 @@
       Array.isArray(target.fallbacks) && target.fallbacks.length
         ? target.fallbacks
         : [{ type: 'css', value: target.selector, kind: 'struct' }];
+    const textOptions = textValues(opts);
 
     for (const c of candidates) {
       if (!c || !c.value) continue;
@@ -530,6 +551,7 @@
           note(`css "${clip(c.value, 60)}": 0 of ${matches.length} visible`);
         }
       } else if (c.type === 'text') {
+        if (textOptions.length) continue; // the user's own texts (below) replace the recorded one
         const el = findByText(c.value);
         if (el && isVisible(el)) {
           note(`text "${clip(c.value, 40)}": matched`);
@@ -537,6 +559,16 @@
         }
         note(`text "${clip(c.value, 40)}": no visible match`);
       }
+    }
+
+    // Explicit possible texts — the label may read differently each run.
+    for (const t of textOptions) {
+      const el = findByText(t);
+      if (el && isVisible(el)) {
+        note(`text option "${clip(t, 40)}": matched`);
+        return done(el);
+      }
+      note(`text option "${clip(t, 40)}": no visible match`);
     }
 
     const hunted = huntBySignature(target.signature, trace);
@@ -971,7 +1003,7 @@
   const DEFAULT_LOCATE_SCAN_MS = 1500;
 
   async function locate(step) {
-    const opts = { textMatch: !!step.textMatch };
+    const opts = { textMatch: !!step.textMatch, textOptions: step.textOptions };
     const scanMs = Math.max(0, Number(step.scanMs) || 0);
     if (scanMs <= 0) {
       const el = resolveTarget(step.target, opts);
@@ -1018,6 +1050,7 @@
       Array.isArray(target.fallbacks) && target.fallbacks.length
         ? target.fallbacks
         : [{ type: 'css', value: target.selector }];
+    const textOptions = textValues(opts);
 
     for (const c of candidates) {
       if (!c || !c.value) continue;
@@ -1028,9 +1061,14 @@
           if (el) return el;
         } catch (_) {}
       } else if (c.type === 'text') {
+        if (textOptions.length) continue; // explicit texts below replace the recorded one
         const el = findByText(c.value);
         if (el) return el;
       }
+    }
+    for (const t of textOptions) {
+      const el = findByText(t);
+      if (el) return el;
     }
     return null;
   }
@@ -1075,7 +1113,7 @@
   /** Evaluate an If condition in the page. The worker applies `negate` afterwards. */
   function evaluateCondition(condition) {
     const cond = condition || {};
-    const opts = { textMatch: !!cond.textMatch };
+    const opts = { textMatch: !!cond.textMatch, textOptions: cond.textOptions };
 
     if (cond.type === 'url' || cond.type === 'urlPattern') {
       const rx = globToRegExp(cond.pattern);
@@ -1123,7 +1161,10 @@
 
     if (step.action === 'scan') {
       const timeout = timeoutValue(step.timeout, 10000);
-      const el = await waitForTarget(step.target, timeout, step.interval, { textMatch: !!step.textMatch });
+      const el = await waitForTarget(step.target, timeout, step.interval, {
+        textMatch: !!step.textMatch,
+        textOptions: step.textOptions
+      });
       if (!el && !step.optional) {
         const seconds = Math.round((timeout / 1000) * 1000) / 1000;
         throw new Error(

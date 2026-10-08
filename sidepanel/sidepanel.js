@@ -737,6 +737,11 @@ function onRuntimeMessage(msg) {
       }
     } else {
       const base = { action, target: msg.target };
+      // Seed the possible-texts list with the label we just saw, to edit from.
+      const picked = Array.isArray(msg.target.fallbacks)
+        ? (msg.target.fallbacks.find((f) => f && f.kind === 'text') || {}).value
+        : '';
+      if (picked) base.textOptions = [picked];
       if (action === 'type') base.value = '';
       if (action === 'press') base.key = 'Enter';
       if (action === 'hover') base.ms = 1000;
@@ -1522,6 +1527,8 @@ function buildScrollTarget(step) {
 }
 
 function matchModeRow(step) {
+  const block = document.createElement('div');
+
   const row = document.createElement('div');
   row.className = 'field-row';
 
@@ -1539,6 +1546,7 @@ function matchModeRow(step) {
   cb.addEventListener('change', () => {
     updateStep(step.id, { textMatch: cb.checked });
     log(cb.checked ? 'Matching by text as well as structure.' : 'Matching by structure only (ignores text).');
+    renderSteps(); // reveal / hide the possible-texts list
   });
 
   const text = document.createElement('span');
@@ -1548,7 +1556,73 @@ function matchModeRow(step) {
   wrap.appendChild(text);
   row.appendChild(label);
   row.appendChild(wrap);
-  return row;
+  block.appendChild(row);
+
+  if (step.textMatch) block.appendChild(textOptionsRow(step));
+  return block;
+}
+
+/**
+ * The list of labels the element might carry. A button's text can change between
+ * runs ("Open Google" → "Open Twitter"); matching by text accepts ANY of these.
+ */
+function textOptionsRow(step) {
+  const wrap = document.createElement('div');
+  wrap.className = 'field-row';
+
+  const label = document.createElement('span');
+  label.className = 'field-label';
+  label.textContent = 'Texts';
+  label.title = 'Match the element by any of these labels — useful when the same button\'s text changes between runs.';
+  wrap.appendChild(label);
+
+  const body = document.createElement('div');
+  body.className = 'text-options-body';
+
+  const list = document.createElement('div');
+  list.className = 'text-options-list';
+  const options = Array.isArray(step.textOptions) ? step.textOptions : [];
+
+  const setOptions = (next) => updateStep(step.id, { textOptions: next });
+
+  options.forEach((value, index) => {
+    const rowEl = document.createElement('div');
+    rowEl.className = 'text-option';
+    rowEl.appendChild(
+      textInput(value, (v) => {
+        const next = Array.isArray(step.textOptions) ? step.textOptions.slice() : [];
+        next[index] = v;
+        setOptions(next);
+      })
+    );
+    const remove = document.createElement('button');
+    remove.className = 'repick-btn';
+    remove.textContent = '\u00d7';
+    remove.title = 'Remove this text';
+    remove.addEventListener('click', () => {
+      const next = Array.isArray(step.textOptions) ? step.textOptions.slice() : [];
+      next.splice(index, 1);
+      setOptions(next);
+      renderSteps();
+    });
+    rowEl.appendChild(remove);
+    list.appendChild(rowEl);
+  });
+  body.appendChild(list);
+
+  const add = document.createElement('button');
+  add.className = 'repick-btn';
+  add.textContent = '+ add text';
+  add.addEventListener('click', () => {
+    const next = Array.isArray(step.textOptions) ? step.textOptions.slice() : [];
+    next.push('');
+    setOptions(next);
+    renderSteps();
+  });
+  body.appendChild(add);
+
+  wrap.appendChild(body);
+  return wrap;
 }
 
 function toolBtn(text, title, onClick, disabled) {

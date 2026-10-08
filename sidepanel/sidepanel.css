@@ -589,6 +589,32 @@ body {
   text-decoration: underline;
 }
 
+/* Possible texts (match by text) ------------------------------- */
+.text-options-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.text-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.text-option {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.text-option .step-input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Run bar ------------------------------------------------------ */
 .run-bar {
   display: flex;

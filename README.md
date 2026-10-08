@@ -19,6 +19,10 @@ under the cursor" approach — and turns it into durable selectors that survive 
   matching as long as the element is there. Text matching is opt-in per step (`also match by
   text`), and if every selector goes stale the player hunts the page for the closest structural
   lookalike — refusing tag-only or ambiguous matches rather than clicking the wrong element.
+- **Possible texts** — with `also match by text` on, a step takes a **list** of labels and matches
+  the element by *any* of them. Handy when the same button's text changes between runs — "Open
+  Google" one moment, "Open Twitter" the next: add both, and either will hit. The list is seeded
+  with the label you picked, so you just extend it.
 - **Step types** — `Click`, `Type` (React/Vue-safe native value set), `Key press`, `Hover` (move
   onto an element and hold), `Scan` (wait for an element), `If` (branches), `Gamble` (chance-based
   gate), `Wait for change`, `Wait` (fixed, random range, or until the page loads), `Scroll`
