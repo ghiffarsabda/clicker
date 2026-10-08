@@ -1143,12 +1143,25 @@
 
     switch (step.action) {
       case 'click': {
+        const root = document.documentElement;
+        try {
+          root.removeAttribute('data-clicker-popup');
+        } catch (_) {}
         performClick(el);
-        // Report the link target so the worker can recover if the page's own
-        // window.open() gets popup-blocked (synthetic clicks have no user activation).
+        // A link that opens a new window/tab does it through the page's own
+        // window.open(), which this isolated world can't see and which the popup
+        // blocker drops (a synthetic click has no user activation). The MAIN-world
+        // hook records that URL on a DOM attribute we both share, for the worker.
+        let popup = null;
+        try {
+          const raw = root.getAttribute('data-clicker-popup');
+          if (raw) popup = JSON.parse(raw);
+        } catch (_) {}
         const anchor = typeof el.closest === 'function' ? el.closest('a[href]') : null;
-        const href = anchor && anchor.href;
-        const link = href && /^https?:/i.test(href) ? { href, target: anchor.getAttribute('target') || '' } : null;
+        const anchorHref = anchor && anchor.href && /^https?:/i.test(anchor.href) ? anchor.href : null;
+        const href = (popup && popup.href) || anchorHref || null;
+        const target = popup && popup.href ? popup.target || '' : anchor ? anchor.getAttribute('target') || '' : '';
+        const link = href ? { href, target, popup: !!popup } : null;
         return { ok: true, matched: step.target && step.target.selector, link };
       }
       case 'type':

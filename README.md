@@ -145,16 +145,19 @@ A macro is not stuck on the tab it started on. Three things move it around:
 - **Open tab** step — open a URL in a fresh tab and continue there.
 - **Switch tab** step — move to the **newest** tab, back to the **previous** tab (the run keeps a
   tab history), or to whichever tab matches a **URL** pattern. Each has an `activate` toggle.
+  Newest/previous look across **all windows**, and if the newest tab is already the one you're on,
+  the step simply stays put instead of failing.
 
 Turn **Follow new tabs** off if you want every step pinned to the starting tab. Tabs that can't be
 scripted (`chrome://`, the Web Store, other extensions) are never adopted.
 
 Two things to know when a tab doesn't move the run:
 
-- A synthetic click carries **no user activation**, so a page's own `window.open()` can be blocked
-  by the popup blocker and no tab ever appears. When a click was on a link and nothing happened,
-  the worker opens the link itself — logged as *"Opened … directly (the page's own popup was
-  blocked)"*.
+- A synthetic click carries **no user activation**, so a page's own `window.open()` is blocked by the
+  popup blocker and no window/tab appears. The extension records the URL the link asked for (even
+  when it's a JS `window.open` on a button, via a hook in the page's own world) and opens it itself
+  in a **new tab** — logged as *"Opened … in a new tab (the page's own popup was blocked)"*. It never
+  hijacks the page you're on to do it, so a following **Switch tab → Newest** finds it.
 - The activity log prints **"Tab → host"** whenever the run moves, so you can see which tab each
   step actually ran on.
 

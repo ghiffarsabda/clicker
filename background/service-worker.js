@@ -252,6 +252,42 @@ async function ensureAgent(tabId) {
   await chrome.scripting
     .executeScript({ target: { tabId }, files: ['content/agent.js'] })
     .catch(() => {});
+  // The popup hook lives in the page's OWN world: a link that opens a new window/tab
+  // does it through the page's window.open, which the isolated content script can't
+  // see. Installed per document, next to the agent.
+  await chrome.scripting
+    .executeScript({ target: { tabId }, world: 'MAIN', func: installPopupHook })
+    .catch(() => {});
+}
+
+/**
+ * Runs in the page's own world. Records the URL a link asked window.open() for on a
+ * DOM attribute both worlds share, so the worker can open it itself when the popup
+ * blocker (synthetic clicks have no user activation) drops it.
+ */
+function installPopupHook() {
+  if (window.__clickerPopupHook) return;
+  window.__clickerPopupHook = true;
+  const record = (href, target, features) => {
+    try {
+      document.documentElement.setAttribute(
+        'data-clicker-popup',
+        JSON.stringify({ href, target: target || '', features: features || '' })
+      );
+    } catch (_) {}
+  };
+  const nativeOpen = window.open;
+  window.open = function (url, name, features) {
+    try {
+      const href = typeof url === 'string' ? url : (url && url.href) || '';
+      if (/^https?:/i.test(href)) record(href, name, features);
+    } catch (_) {}
+    try {
+      return nativeOpen.apply(window, arguments);
+    } catch (_) {
+      return null;
+    }
+  };
 }
 
 /**
@@ -540,7 +576,9 @@ async function runSteps(steps, depth) {
     const opensTab = step.action === 'click' && res && res.link;
     const grace = !opensTab ? 0 : expectNewTab(step, res) ? NEW_TAB_GRACE : CLICK_GRACE;
     const adopted = activeRun.follow && !activeRun.blockFollow ? await maybeFollowNewTab(grace) : null;
-    if (step.action === 'click' && activeRun.follow && !adopted && res && res.link) {
+    // Recover a blocked new-window/new-tab link whether or not follow is on — the tab
+    // must at least exist for a following Switch step to find it.
+    if (step.action === 'click' && !adopted && res && res.link) {
       await openLinkFallback(res.link, res.urlBefore);
     }
   }
@@ -719,6 +757,12 @@ async function runStep(step, depth) {
   return Object.assign({}, res, { urlBefore });
 }
 
+/** Same page, ignoring the fragment and a trailing slash. */
+function samePage(a, b) {
+  const strip = (u) => String(u || '').split('#')[0].replace(/\/+$/, '');
+  return strip(a) === strip(b);
+}
+
 /**
  * A synthetic click carries no user activation, so a page's own window.open()
  * can be blocked by the popup blocker and no tab ever appears. If the click was
@@ -731,16 +775,25 @@ async function openLinkFallback(link, urlBefore) {
   if (urlBefore && current.url !== urlBefore) return; // the page navigated on its own
   if (current.status === 'loading') return; // a navigation is already under way
 
-  emit({ type: 'NOTE', text: `Opened ${link.href} directly (the page's own popup was blocked)` });
+  // A new-window/new-tab link (target=_blank, a named window, or a JS window.open the
+  // popup blocker killed) must not hijack the page we're on — give it its own tab.
+  const newContext = link.popup || (link.target && !/^_(self|top|parent)$/i.test(link.target));
 
-  if (link.target === '_blank') {
-    const created = await chrome.tabs.create({ url: link.href, active: true });
-    const loaded = await waitForNewTabUrl(created.id).catch(() => null);
-    await ensureAgent(created.id).catch(() => {});
-    adoptTab(created.id, { reason: 'open', tab: loaded || created });
+  if (newContext) {
+    let target = (await chrome.tabs.query({})).find((t) => t.url && samePage(t.url, link.href)) || null;
+    if (!target) {
+      emit({ type: 'NOTE', text: `Opened ${link.href} in a new tab (the page's own popup was blocked)` });
+      const created = await chrome.tabs.create({ url: link.href, active: true });
+      target = (await waitForNewTabUrl(created.id).catch(() => null)) || created;
+    }
+    if (activeRun.follow) {
+      await ensureAgent(target.id).catch(() => {});
+      adoptTab(target.id, { reason: 'open', tab: target });
+    }
     return;
   }
 
+  emit({ type: 'NOTE', text: `Opened ${link.href} directly (the page's own popup was blocked)` });
   await chrome.tabs.update(activeRun.tabId, { url: link.href }).catch(() => {});
   await waitForTabComplete(activeRun.tabId, urlBefore || '');
   await sleep(250);
@@ -1027,15 +1080,19 @@ async function resolveSwitchTarget(step) {
     return here && !isRestricted(here) && matches(here) ? here : null;
   }
 
-  const all = await chrome.tabs.query({ windowId: activeRun.windowId });
+  // Search every window: a tab the page opened (or the run followed) can live in
+  // another one, and "Newest tab" that only looked in the run's window missed it.
+  const all = await chrome.tabs.query({});
 
   if (step.mode === 'previous') {
     const prevId = activeRun.history[activeRun.history.length - 2];
     return all.find((t) => t.id === prevId) || null;
   }
 
-  const others = all.filter((t) => t.id !== activeRun.tabId && !isRestricted(t));
-  return others.slice().sort((a, b) => (b.id || 0) - (a.id || 0))[0] || null; // newest
+  // Newest: the most recently created tab anywhere. If the run already followed it
+  // here, adoptTab no-ops and the step stays put instead of erroring "no matching tab".
+  const runnable = all.filter((t) => !isRestricted(t));
+  return runnable.slice().sort((a, b) => (b.id || 0) - (a.id || 0))[0] || null;
 }
 
 /* ---------------------------------------------------------------- *
